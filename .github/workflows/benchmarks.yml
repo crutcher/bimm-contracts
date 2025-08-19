@@ -1,0 +1,44 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Criterion
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Cache Cargo binaries and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Criterion
+        run: |
+          cargo install cargo-criterion
+          cargo criterion 
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: criterion-benchmark-reports
+          path: target/criterion/reports

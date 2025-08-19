@@ -9,8 +9,8 @@ members = [
 
 [workspace.package]
 edition = "2024"
-version = "0.4.0"
-repository = "https://github.com/crutcher/bimm"
+version = "0.4.1"
+repository = "https://github.com/crutcher/bimm-contracts"
 license = "MIT"
 rust-version = "1.88.0"
 
