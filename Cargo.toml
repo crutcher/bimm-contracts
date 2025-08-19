@@ -1,0 +1,39 @@
+[workspace]
+# Require version 2 to avoid "feature" additiveness for dev-dependencies
+# https://doc.rust-lang.org/cargo/reference/resolver.html#feature-resolver-version-2
+resolver = "2"
+
+members = [
+  "crates/*",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.4.0"
+repository = "https://github.com/crutcher/bimm"
+license = "MIT"
+rust-version = "1.88.0"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+double_must_use = "allow"
+doc_markdown = "warn"
+
+[profile.test]
+# Ensure proc-macros can find dependencies in RustRover tests.
+rpath = true
+
+[workspace.dependencies]
+burn = { version = "^0.18.0" }
+
+# macro dependencies
+proc-macro2 = { version = "^1.0.97" }
+syn = { version = "^2.0.104" }
+quote = { version = "^1.0.40" }
+
+# Test and/or Examples dependencies
+criterion = { version = "^0.7.0" }
+indoc = { version = "^2.0.6" }
+
