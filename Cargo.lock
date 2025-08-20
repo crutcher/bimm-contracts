@@ -271,6 +271,7 @@ dependencies = [
  "burn",
  "criterion",
  "indoc",
+ "tch",
 ]
 
 [[package]]

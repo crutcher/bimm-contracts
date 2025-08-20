@@ -18,7 +18,9 @@ workspace = true
 
 [dependencies]
 bimm-contracts-macros = { version = "0.4.1", path = "../bimm-contracts-macros" }
+
 burn = { workspace = true, optional = true }
+tch = { workspace = true, optional = true }
 
 [dev-dependencies]
 burn = { workspace = true, features = ["ndarray"] }
@@ -36,6 +38,7 @@ name = "math"
 harness = false
 
 [features]
-default = ["burn"]
-burn = ["dep:burn"]
+default = []
 std = []
+burn = ["dep:burn"]
+tch = ["dep:tch"]

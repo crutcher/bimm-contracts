@@ -134,7 +134,7 @@
 //!
 //! ## Usage Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use burn::prelude::{Tensor, Backend};
 //! use burn::tensor::BasicOps;
 //! use bimm_contracts::{unpack_shape_contract, assert_shape_contract_periodically};

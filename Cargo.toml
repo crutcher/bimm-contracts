@@ -27,6 +27,7 @@ rpath = true
 
 [workspace.dependencies]
 burn = { version = "^0.18.0" }
+tch = { version = "^0.19.0" }
 
 # macro dependencies
 proc-macro2 = { version = "^1.0.97" }
