@@ -40,6 +40,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::{Display, Formatter};
+use core::panic::Location;
 
 /// A term in a shape pattern.
 ///
@@ -235,14 +236,14 @@ impl<'a> ShapeContract<'a> {
     ///     );
     /// }}
     /// ```
-    #[inline(always)]
+    #[track_caller]
     pub fn assert_shape<S>(&'a self, shape: S, env: StackEnvironment<'a>)
     where
         S: ShapeArgument,
     {
-        let result = self.try_assert_shape(shape, env);
-        if result.is_err() {
-            panic!("{}", result.unwrap_err());
+        match self._try_assert_shape(shape, env, Location::caller()) {
+            Ok(()) => (),
+            Err(msg) => panic!("{}", msg),
         }
     }
 
@@ -279,14 +280,26 @@ impl<'a> ShapeContract<'a> {
     ///     &[("h_wins", 2), ("w_wins", 3), ("channels", 4)]
     /// ).unwrap();
     /// ```
-    #[inline(always)]
+    #[track_caller]
     pub fn try_assert_shape<S>(&'a self, shape: S, env: StackEnvironment<'a>) -> Result<(), String>
+    where
+        S: ShapeArgument,
+    {
+        self._try_assert_shape(shape, env, Location::caller())
+    }
+
+    fn _try_assert_shape<S>(
+        &'a self,
+        shape: S,
+        env: StackEnvironment<'a>,
+        loc: &Location<'a>,
+    ) -> Result<(), String>
     where
         S: ShapeArgument,
     {
         let mut mut_env = MutableStackEnvironment::new(env);
 
-        self.try_resolve_match(shape, &mut mut_env)
+        self.try_resolve_match(shape, &mut mut_env, loc)
     }
 
     /// Match and unpack `K` keys from a shape pattern.
@@ -337,7 +350,7 @@ impl<'a> ShapeContract<'a> {
     /// assert_eq!(c, 4);
     /// ```
     #[must_use]
-    #[inline(always)]
+    #[track_caller]
     pub fn unpack_shape<S, const K: usize>(
         &'a self,
         shape: S,
@@ -347,7 +360,22 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        match self.try_unpack_shape(shape, keys, env) {
+        self._unpack_shape(shape, keys, env, Location::caller())
+    }
+
+    #[must_use]
+    #[track_caller]
+    fn _unpack_shape<S, const K: usize>(
+        &'a self,
+        shape: S,
+        keys: &[&'a str; K],
+        env: StackEnvironment<'a>,
+        loc: &Location<'a>,
+    ) -> [usize; K]
+    where
+        S: ShapeArgument,
+    {
+        match self._try_unpack_shape(shape, keys, env, loc) {
             Ok(values) => values,
             Err(msg) => panic!("{msg}"),
         }
@@ -395,7 +423,7 @@ impl<'a> ShapeContract<'a> {
     /// assert_eq!(c, 4);
     /// ```
     #[must_use]
-    #[inline(always)]
+    #[track_caller]
     pub fn try_unpack_shape<S, const K: usize>(
         &'a self,
         shape: S,
@@ -405,9 +433,23 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
+        self._try_unpack_shape(shape, keys, env, Location::caller())
+    }
+
+    #[must_use]
+    fn _try_unpack_shape<S, const K: usize>(
+        &'a self,
+        shape: S,
+        keys: &[&'a str; K],
+        env: StackEnvironment<'a>,
+        loc: &Location<'a>,
+    ) -> Result<[usize; K], String>
+    where
+        S: ShapeArgument,
+    {
         let mut mut_env = MutableStackEnvironment::new(env);
 
-        self.try_resolve_match(shape, &mut mut_env)?;
+        self.try_resolve_match(shape, &mut mut_env, loc)?;
 
         Ok(mut_env.export_key_values(keys))
     }
@@ -424,11 +466,11 @@ impl<'a> ShapeContract<'a> {
     /// - `Ok(())`: if the shape matches the pattern.
     /// - `Err(String)`: if the shape does not match the pattern, with an error message.
     #[must_use]
-    #[inline(always)]
     fn try_resolve_match<S>(
         &'a self,
         shape: S,
         env: &mut MutableStackEnvironment<'a>,
+        location: &Location<'a>,
     ) -> Result<(), String>
     where
         S: ShapeArgument,
@@ -437,7 +479,9 @@ impl<'a> ShapeContract<'a> {
 
         let fail = |msg| -> String {
             format!(
-                "Shape Error:: {msg}\n shape:\n  {shape:?}\n expected:\n  {self}\n  {{{}}}",
+                "at {}:{}: Shape Error\n  {msg}\nActual:\n  {shape:?}\nContract:\n  {self}\nBindings:\n  {{{}}}",
+                location.file(),
+                location.line(),
                 env.backing
                     .iter()
                     .map(|(k, v)| format!("\"{k}\": {v}"))
@@ -519,7 +563,6 @@ impl<'a> ShapeContract<'a> {
     ///
     /// - `Ok((usize, usize))`: the position of the ellipsis and the number of dimensions it matches.
     /// - `Err(String)`: an error message if the pattern does not match the expected size.
-    #[inline(always)]
     #[must_use]
     fn try_ellipsis_split(&self, rank: usize) -> Result<(usize, usize), String> {
         let k = self.terms.len();
@@ -630,38 +673,54 @@ mod tests {
         assert_eq!(u_wwins, wwins);
         assert_eq!(u_height, hwins * window);
 
+        let err = CONTRACT
+            .try_unpack_shape(
+                &shape,
+                &["hwins", "wwins"],
+                &[("window", window + 1), ("color", color)],
+            )
+            .unwrap_err();
+        let (header, body) = err.split_once("\n").unwrap();
+
+        assert!(header.starts_with("at"));
+        assert!(header.contains("contracts.rs"));
+        assert!(header.ends_with(": Shape Error"));
+
         assert_eq!(
-            CONTRACT
-                .try_unpack_shape(
-                    &shape,
-                    &["hwins", "wwins"],
-                    &[("window", window + 1), ("color", color),]
-                )
-                .unwrap_err(),
+            body,
             indoc! {r#"
-                Shape Error:: 8 !~ height=(hwins*window) :: No integer solution.
-                 shape:
+                  8 !~ height=(hwins*window) :: No integer solution.
+                Actual:
                   [1, 2, 3, 8, 12, 3]
-                 expected:
+                Contract:
                   [..., height=(hwins*window), width=(wwins*window), color]
+                Bindings:
                   {"window": 5, "color": 3}"#
             },
         );
 
+        let err = CONTRACT
+            .try_unpack_shape(
+                &shape,
+                &["hwins", "wwins"],
+                &[("height", 1), ("window", window), ("color", color)],
+            )
+            .unwrap_err();
+        let (header, body) = err.split_once("\n").unwrap();
+
+        assert!(header.starts_with("at"));
+        assert!(header.contains("contracts.rs"));
+        assert!(header.ends_with(": Shape Error"));
+
         assert_eq!(
-            CONTRACT
-                .try_unpack_shape(
-                    &shape,
-                    &["hwins", "wwins"],
-                    &[("height", 1), ("window", window), ("color", color),]
-                )
-                .unwrap_err(),
+            body,
             indoc! {r#"
-                Shape Error:: 8 !~ height=(hwins*window) :: Value MissMatch.
-                 shape:
+                  8 !~ height=(hwins*window) :: Value MissMatch.
+                Actual:
                   [1, 2, 3, 8, 12, 3]
-                 expected:
+                Contract:
                   [..., height=(hwins*window), width=(wwins*window), color]
+                Bindings:
                   {"height": 1, "window": 4, "color": 3}"#
             },
         );
@@ -748,7 +807,7 @@ mod tests {
         assert_eq!(u_z, z);
     }
 
-    #[should_panic(expected = "Shape Error:: 1 !~ a :: Value MissMatch.")]
+    #[should_panic(expected = "1 !~ a :: Value MissMatch.")]
     #[test]
     fn test_unpack_shape_panic() {
         use crate as bimm_contracts;

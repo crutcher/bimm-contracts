@@ -18,6 +18,8 @@ The goal of this library is to make in-line geometry contracts:
 
 #### Recent Changes
 
+* **0.4.2**
+  * Add `#[track_caller]` support for better error messages.
 * **0.4.0**
   * Decouple versioning from `bimm`.
 * **0.3.0**

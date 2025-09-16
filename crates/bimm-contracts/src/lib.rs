@@ -262,8 +262,8 @@ pub mod expressions;
 pub mod macros;
 pub mod math;
 pub mod shape_argument;
-pub mod support;
 pub mod slot_map;
+pub mod support;
 
 pub use bindings::StackEnvironment;
 pub use contracts::{DimMatcher, ShapeContract};

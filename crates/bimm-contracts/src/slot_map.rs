@@ -1,4 +1,4 @@
-//! # SlotMap and Index
+//! # `SlotMap` and Index
 //!
 //! Fast mutable maps with limited discrete key spaces.
 
@@ -6,10 +6,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
-///
+/// Key-To-Index Slot Mapping.
 #[derive(Debug)]
 pub struct SlotIndex<'a> {
-    /// The index of the slot in the SlotMap's storage.
+    /// The index of the slot in the `SlotMap`'s storage.
     pub keys: &'a [&'a str],
 }
 
@@ -36,17 +36,22 @@ impl<'a> SlotIndex<'a> {
 
 /// A slot-based map.
 pub struct SlotMap<T>
-where T: 'static + Debug + Clone
+where
+    T: 'static + Debug + Clone,
 {
     /// The slots in the map.
-    pub slots: Vec<Option<T>>
+    pub slots: Vec<Option<T>>,
 }
 
 impl<T> SlotMap<T>
-    where T: 'static + Debug + Clone {
+where
+    T: 'static + Debug + Clone,
+{
     /// Create a new map with the given capacity.
     pub fn new_with_capacity(capacity: usize) -> Self {
-        Self { slots: vec![None; capacity] }
+        Self {
+            slots: vec![None; capacity],
+        }
     }
 
     /// Clear the map.
@@ -71,7 +76,9 @@ mod tests {
 
     #[test]
     fn test_slot_index() {
-        static INDEX: SlotIndex<'static> = SlotIndex { keys: &["a", "b", "c"] };
+        static INDEX: SlotIndex<'static> = SlotIndex {
+            keys: &["a", "b", "c"],
+        };
 
         assert_eq!(INDEX.slot_count(), 3);
 
@@ -83,7 +90,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "Unknown key: d")]
     fn test_slot_index_panic() {
-        static INDEX: SlotIndex<'static> = SlotIndex { keys: &["a", "b", "c"] };
+        static INDEX: SlotIndex<'static> = SlotIndex {
+            keys: &["a", "b", "c"],
+        };
 
         INDEX.to_slot("d");
     }
