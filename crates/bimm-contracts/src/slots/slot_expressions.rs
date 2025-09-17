@@ -2,7 +2,6 @@
 
 use crate::math::maybe_iroot;
 use crate::slots::slot_map::SlotBindings;
-use alloc::string::{String, ToString};
 use core::fmt::{Display, Formatter};
 
 /// A stack/static expression algebra for dimension sizes.
@@ -231,7 +230,7 @@ impl<'a> SlotDimExpr<'a> {
     /// * `Ok(MatchResult::Constraint(name, value))` if the expression can be solved for a single unbound parameter.
     /// * `Ok(MatchResult::UnderConstrained)` if the expression cannot be solved with the current bindings.
     #[must_use]
-    pub fn try_match<E>(&self, target: isize, env: &E) -> Result<MatchResult, String>
+    pub fn try_match<E>(&self, target: isize, env: &E) -> Result<MatchResult, &'static str>
     where
         E: SlotBindings,
     {
@@ -241,7 +240,7 @@ impl<'a> SlotDimExpr<'a> {
             env: &E,
             zero: isize,
             op: fn(&mut isize, isize),
-        ) -> Result<(isize, Option<&'a SlotDimExpr<'a>>), String>
+        ) -> Result<(isize, Option<&'a SlotDimExpr<'a>>), &'static str>
         where
             E: SlotBindings,
         {
@@ -255,7 +254,7 @@ impl<'a> SlotDimExpr<'a> {
                         if count == 1 && rem_expr.is_none() {
                             rem_expr = Some(expr);
                         } else {
-                            return Err("Too many unbound params".to_string());
+                            return Err("Too many unbound params.");
                         }
                     }
                 }
@@ -281,7 +280,7 @@ impl<'a> SlotDimExpr<'a> {
             SlotDimExpr::Negate { child } => child.try_match(-target, env),
             SlotDimExpr::Pow { base: child, exp } => match maybe_iroot(target, *exp) {
                 Some(root) => child.try_match(root, env),
-                None => Err("No integer solution.".to_string()),
+                None => Err("No integer solution."),
             },
             SlotDimExpr::Sum { children } => {
                 let (value, rem) = reduce_children(children, env, 0, |tmp, value| *tmp += value)?;
@@ -298,7 +297,7 @@ impl<'a> SlotDimExpr<'a> {
                 if let Some(expr) = rem {
                     if target % value != 0 {
                         // Non-integer solution
-                        return Err("No integer solution.".to_string());
+                        return Err("No integer solution.");
                     }
                     expr.try_match(target / value, env)
                 } else if value == target {
@@ -321,7 +320,7 @@ mod tests {
     #[test]
     fn test_format() {
         static INDEX: SlotIndex = SlotIndex {
-            keys: &["a", "b", "c"],
+            keys: &["a", "b", "c", "d", "e"],
         };
 
         fn fmt(expr: &SlotDimExpr) -> String {
@@ -340,11 +339,86 @@ mod tests {
             }),
             "a"
         );
+
+        let _expr = SlotDimExpr::Prod {
+            children: &[
+                SlotDimExpr::Param { id: 0 },
+                SlotDimExpr::Param { id: 1 },
+                SlotDimExpr::Sum {
+                    children: &[
+                        SlotDimExpr::Param { id: 2 },
+                        SlotDimExpr::Pow {
+                            base: &SlotDimExpr::Param { id: 3 },
+                            exp: 2,
+                        },
+                        SlotDimExpr::Negate {
+                            child: &SlotDimExpr::Param { id: 4 },
+                        },
+                    ],
+                },
+            ],
+        };
+        assert_eq!(fmt(&_expr), "(a*b*(c+(d^2)+(-e)))");
     }
 
     #[test]
-    fn test_too_many_unbound_params() {
-        let env = [Some(5), Some(3), None, None];
+    fn test_eval_param() {
+        let env = [Some(5), None];
+
+        let expr = SlotDimExpr::Param { id: 0 };
+        assert_eq!(expr.try_eval(&env), EvalResult::Value { value: 5 });
+        assert_eq!(expr.try_match(5, &env), Ok(MatchResult::Match));
+        assert_eq!(expr.try_match(42, &env), Ok(MatchResult::Conflict));
+
+        let expr = SlotDimExpr::Param { id: 1 };
+        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 1 });
+        assert_eq!(
+            expr.try_match(5, &env),
+            Ok(MatchResult::ParamConstraint { id: 1, value: 5 })
+        );
+    }
+
+    #[test]
+    fn try_eval_negate() {
+        let expr = SlotDimExpr::Negate {
+            child: &SlotDimExpr::Param { id: 0 },
+        };
+
+        let env = [Some(5)];
+        assert_eq!(expr.try_eval(&env), EvalResult::Value { value: -5 });
+        assert_eq!(expr.try_match(-5, &env), Ok(MatchResult::Match));
+        assert_eq!(expr.try_match(42, &env), Ok(MatchResult::Conflict));
+
+        let env = [None];
+        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 1 });
+        assert_eq!(
+            expr.try_match(-5, &env),
+            Ok(MatchResult::ParamConstraint { id: 0, value: 5 })
+        );
+    }
+
+    #[test]
+    fn try_eval_pow() {
+        let expr = SlotDimExpr::Pow {
+            base: &SlotDimExpr::Param { id: 0 },
+            exp: 3,
+        };
+
+        let env = [Some(5)];
+        assert_eq!(expr.try_eval(&env), EvalResult::Value { value: 125 });
+        assert_eq!(expr.try_match(125, &env), Ok(MatchResult::Match));
+        assert_eq!(expr.try_match(42, &env), Err("No integer solution."));
+
+        let env = [None];
+        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 1 });
+        assert_eq!(
+            expr.try_match(125, &env),
+            Ok(MatchResult::ParamConstraint { id: 0, value: 5 })
+        );
+    }
+
+    #[test]
+    fn test_eval_sum() {
         let expr = SlotDimExpr::Sum {
             children: &[
                 SlotDimExpr::Param { id: 0 },
@@ -353,29 +427,52 @@ mod tests {
                 SlotDimExpr::Param { id: 3 },
             ],
         };
-        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 2 });
-    }
 
-    #[test]
-    fn test_pow_no_integer_solution() {
-        let env = [Some(5)];
+        let env = [Some(2), Some(3), Some(4), Some(5)];
+        assert_eq!(expr.try_eval(&env), EvalResult::Value { value: 14 });
+        assert_eq!(expr.try_match(14, &env), Ok(MatchResult::Match));
+        assert_eq!(expr.try_match(42, &env), Ok(MatchResult::Conflict));
 
-        let expr = SlotDimExpr::Pow {
-            base: &SlotDimExpr::Param { id: 0 },
-            exp: 3,
-        };
-
-        assert_eq!(expr.try_eval(&env), EvalResult::Value { value: 125 });
-        assert!(expr.try_match(126, &env).is_err());
-    }
-
-    #[test]
-    fn test_prod_no_integer_solution() {
-        let env = [Some(5), None];
-
-        let expr = SlotDimExpr::Prod {
-            children: &[SlotDimExpr::Param { id: 0 }, SlotDimExpr::Param { id: 1 }],
-        };
+        let env = [Some(2), Some(3), None, Some(5)];
         assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 1 });
+        assert_eq!(
+            expr.try_match(14, &env),
+            Ok(MatchResult::ParamConstraint { id: 2, value: 4 })
+        );
+
+        let env = [Some(5), Some(3), None, None];
+        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 2 });
+        assert_eq!(expr.try_match(14, &env), Err("Too many unbound params."));
+    }
+
+    #[test]
+    fn test_eval_prod() {
+        let expr = SlotDimExpr::Prod {
+            children: &[
+                SlotDimExpr::Param { id: 0 },
+                SlotDimExpr::Param { id: 1 },
+                SlotDimExpr::Param { id: 2 },
+                SlotDimExpr::Param { id: 3 },
+            ],
+        };
+
+        let env = [Some(2), Some(3), Some(4), Some(5)];
+        assert_eq!(expr.try_eval(&env), EvalResult::Value { value: 120 });
+        assert_eq!(expr.try_match(120, &env), Ok(MatchResult::Match));
+        assert_eq!(expr.try_match(42, &env), Ok(MatchResult::Conflict));
+
+        let env = [Some(2), Some(3), None, Some(5)];
+        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 1 });
+        assert_eq!(
+            expr.try_match(120, &env),
+            Ok(MatchResult::ParamConstraint { id: 2, value: 4 })
+        );
+
+        let env = [Some(1), Some(5), None, Some(5)];
+        assert_eq!(expr.try_match(40, &env), Err("No integer solution."));
+
+        let env = [Some(5), Some(3), None, None];
+        assert_eq!(expr.try_eval(&env), EvalResult::UnboundParams { count: 2 });
+        assert_eq!(expr.try_match(120, &env), Err("Too many unbound params."));
     }
 }
