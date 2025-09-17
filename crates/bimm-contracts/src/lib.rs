@@ -262,7 +262,7 @@ pub mod expressions;
 pub mod macros;
 pub mod math;
 pub mod shape_argument;
-pub mod slot_map;
+pub mod slots;
 pub mod support;
 
 pub use bindings::StackEnvironment;
