@@ -37,9 +37,9 @@
 use crate::StackEnvironment;
 use crate::shape_argument::ShapeArgument;
 use crate::slots::slot_expressions::{ExprDisplayAdapter, MatchResult, SlotDimExpr};
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt::{Display, Formatter};
 use core::panic::Location;
 
@@ -184,6 +184,51 @@ impl Display for SlotShapeContract<'_> {
 }
 
 impl<'a> SlotShapeContract<'a> {
+    /// Create a new shape pattern from a slice of terms.
+    ///
+    /// ## Arguments
+    ///
+    /// - `terms`: a slice of `ShapePatternTerm` that defines the pattern.
+    ///
+    /// ## Returns
+    ///
+    /// A new `ShapePattern` instance.
+    ///
+    /// ## Macro Support
+    ///
+    /// Consider using the [`crate::shape_contract`] macro instead.
+    ///
+    /// ```
+    /// use bimm_contracts::{shape_contract, ShapeContract};
+    ///
+    /// static CONTRACT : ShapeContract = shape_contract![
+    ///    ...,
+    ///    "height" = "h_wins" * "window",
+    ///    "width" = "w_wins" * "window",
+    ///    "channels",
+    /// ];
+    /// ```
+    pub const fn new(index: &'a [&'a str], terms: &'a [SlotDimMatcher<'a>]) -> Self {
+        let mut i = 0;
+        let mut ellipsis_pos: Option<usize> = None;
+
+        while i < terms.len() {
+            if matches!(terms[i], SlotDimMatcher::Ellipsis { .. }) {
+                match ellipsis_pos {
+                    Some(_) => panic!("Multiple ellipses in pattern"),
+                    None => ellipsis_pos = Some(i),
+                }
+            }
+            i += 1;
+        }
+
+        SlotShapeContract {
+            index,
+            terms,
+            ellipsis_pos,
+        }
+    }
+
     /// Assert that the shape matches the pattern.
     ///
     /// ## Arguments
@@ -280,8 +325,7 @@ impl<'a> SlotShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        let mut scratch: Vec<Option<isize>> = Vec::with_capacity(self.index.len());
-        scratch.fill_with(|| None);
+        let mut scratch: Vec<Option<isize>> = vec![None; self.index.len()];
         for (k, v) in env.iter() {
             let v = *v as isize;
             scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
@@ -433,8 +477,7 @@ impl<'a> SlotShapeContract<'a> {
     {
         let selection = self.expect_keys_to_selection(keys);
 
-        let mut scratch: Vec<Option<isize>> = Vec::with_capacity(self.index.len());
-        scratch.fill_with(|| None);
+        let mut scratch: Vec<Option<isize>> = vec![None; self.index.len()];
         for (k, v) in env.iter() {
             let v = *v as isize;
             scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
@@ -645,4 +688,49 @@ impl<'a> SlotShapeContract<'a> {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::slots::slot_contracts::{SlotDimMatcher, SlotShapeContract};
+    use crate::slots::slot_expressions::SlotDimExpr;
+
+    #[test]
+    fn test_unpack_shape() {
+        static CONTRACT: SlotShapeContract = SlotShapeContract::new(
+            &["b", "h", "w", "p", "z", "c"],
+            &[
+                SlotDimMatcher::any(),
+                SlotDimMatcher::expr(SlotDimExpr::Param { id: 0 }),
+                SlotDimMatcher::ellipsis(),
+                SlotDimMatcher::expr(SlotDimExpr::Prod {
+                    children: &[SlotDimExpr::Param { id: 1 }, SlotDimExpr::Param { id: 3 }],
+                }),
+                SlotDimMatcher::expr(SlotDimExpr::Prod {
+                    children: &[SlotDimExpr::Param { id: 2 }, SlotDimExpr::Param { id: 3 }],
+                }),
+                SlotDimMatcher::expr(SlotDimExpr::Pow {
+                    base: &SlotDimExpr::Param { id: 4 },
+                    exp: 3,
+                }),
+                SlotDimMatcher::expr(SlotDimExpr::Param { id: 5 }),
+            ],
+        );
+
+        let b = 2;
+        let h = 3;
+        let w = 2;
+        let p = 4;
+        let c = 5;
+        let z = 4;
+
+        let shape = [12, b, 1, 2, 3, h * p, w * p, z * z * z, c];
+        let env = [("p", p), ("c", c)];
+
+        CONTRACT.assert_shape(&shape, &env);
+
+        let [u_b, u_h, u_w, u_z] = CONTRACT.unpack_shape(&shape, &["b", "h", "w", "z"], &env);
+
+        assert_eq!(u_b, b);
+        assert_eq!(u_h, h);
+        assert_eq!(u_w, w);
+        assert_eq!(u_z, z);
+    }
+}
