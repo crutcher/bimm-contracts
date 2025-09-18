@@ -34,6 +34,7 @@
 //! assert_eq!(w_wins, 3);
 //! ```
 
+use crate::StackEnvironment;
 use crate::shape_argument::ShapeArgument;
 use crate::slots::slot_expressions::{ExprDisplayAdapter, MatchResult, SlotDimExpr};
 use alloc::format;
@@ -183,13 +184,309 @@ impl Display for SlotShapeContract<'_> {
 }
 
 impl<'a> SlotShapeContract<'a> {
+    /// Assert that the shape matches the pattern.
+    ///
+    /// ## Arguments
+    ///
+    /// - `shape`: the shape to match.
+    /// - `env`: the params which are already bound.
+    ///
+    /// ## Panics
+    ///
+    /// If the shape does not match the pattern, or if there is a conflict in the bindings.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use bimm_contracts::{shape_contract, run_periodically, ShapeContract};
+    ///
+    /// let shape = [1, 2, 3, 2 * 8, 3 * 8, 4];
+    ///
+    /// // Run under backoff amortization.
+    /// run_periodically! {{
+    ///     // Statically allocated contract.
+    ///     static CONTRACT : ShapeContract = shape_contract![
+    ///        ...,
+    ///        "height" = "h_wins" * "window",
+    ///        "width" = "w_wins" * "window",
+    ///        "channels",
+    ///     ];
+    ///
+    ///     // Assert the shape, given the bindings.
+    ///     CONTRACT.assert_shape(
+    ///         &shape,
+    ///         &[("h_wins", 2), ("w_wins", 3), ("channels", 4)]
+    ///     );
+    /// }}
+    /// ```
+    #[track_caller]
+    pub fn assert_shape<S>(&'a self, shape: S, env: StackEnvironment<'a>)
+    where
+        S: ShapeArgument,
+    {
+        match self._loc_try_assert_shape(shape, env, Location::caller()) {
+            Ok(()) => (),
+            Err(msg) => panic!("{}", msg),
+        }
+    }
+
+    /// Assert that the shape matches the pattern.
+    ///
+    /// ## Arguments
+    ///
+    /// - `shape`: the shape to match.
+    /// - `env`: the params which are already bound.
+    ///
+    /// ## Returns
+    ///
+    /// - `Ok(())`: if the shape matches the pattern.
+    /// - `Err(String)`: if the shape does not match the pattern, with an error message.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use bimm_contracts::{shape_contract, run_periodically, ShapeContract};
+    ///
+    /// let shape = [1, 2, 3, 2 * 8, 3 * 8, 4];
+    ///
+    /// // Statically allocated contract.
+    /// static CONTRACT : ShapeContract = shape_contract![
+    ///    ...,
+    ///    "height" = "h_wins" * "window",
+    ///    "width" = "w_wins" * "window",
+    ///    "channels",
+    /// ];
+    ///
+    /// // Assert the shape, given the bindings; or throw.
+    /// CONTRACT.try_assert_shape(
+    ///     &shape,
+    ///     &[("h_wins", 2), ("w_wins", 3), ("channels", 4)]
+    /// ).unwrap();
+    /// ```
+    #[track_caller]
+    pub fn try_assert_shape<S>(&'a self, shape: S, env: StackEnvironment<'a>) -> Result<(), String>
+    where
+        S: ShapeArgument,
+    {
+        self._loc_try_assert_shape(shape, env, Location::caller())
+    }
+
+    fn _loc_try_assert_shape<S>(
+        &'a self,
+        shape: S,
+        env: StackEnvironment<'a>,
+        loc: &Location<'a>,
+    ) -> Result<(), String>
+    where
+        S: ShapeArgument,
+    {
+        let mut scratch: Vec<Option<isize>> = Vec::with_capacity(self.index.len());
+        scratch.fill_with(|| None);
+        for (k, v) in env.iter() {
+            let v = *v as isize;
+            scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
+        }
+
+        self.format_resolve(shape, scratch.as_mut_slice(), loc)
+    }
+
+    /// Match and unpack `K` keys from a shape pattern.
+    ///
+    /// Wraps `try_unpack_shape` and panics if the shape does not match.
+    ///
+    /// ## Generics
+    ///
+    /// - `K`: the length of the `keys` array.
+    ///
+    /// ## Arguments
+    ///
+    /// - `shape`: the shape to match.
+    /// - `keys`: the bound keys to export.
+    /// - `env`: the params which are already bound.
+    ///
+    /// ## Returns
+    ///
+    /// An `[usize; K]` of the unpacked `keys` values.
+    ///
+    /// ## Panics
+    ///
+    /// If the shape does not match the pattern, or if there is a conflict in the bindings.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use bimm_contracts::{shape_contract, run_periodically, ShapeContract};
+    ///
+    /// let shape = [1, 2, 3, 2 * 8, 3 * 8, 4];
+    ///
+    /// // Statically allocated contract.
+    /// static CONTRACT : ShapeContract = shape_contract![
+    ///    ...,
+    ///    "height" = "h_wins" * "window",
+    ///    "width" = "w_wins" * "window",
+    ///    "channels",
+    /// ];
+    ///
+    /// // Unpack the shape, given the bindings.
+    /// let [h, w, c] = CONTRACT.unpack_shape(
+    ///     &shape,
+    ///     &["h_wins", "w_wins", "channels"],
+    ///     &[("window", 8)]
+    /// );
+    /// assert_eq!(h, 2);
+    /// assert_eq!(w, 3);
+    /// assert_eq!(c, 4);
+    /// ```
+    #[must_use]
+    #[track_caller]
+    pub fn unpack_shape<S, const K: usize>(
+        &'a self,
+        shape: S,
+        keys: &[&'a str; K],
+        env: StackEnvironment<'a>,
+    ) -> [usize; K]
+    where
+        S: ShapeArgument,
+    {
+        self._loc_unpack_shape(shape, keys, env, Location::caller())
+    }
+
+    fn _loc_unpack_shape<S, const K: usize>(
+        &'a self,
+        shape: S,
+        keys: &[&'a str; K],
+        env: StackEnvironment<'a>,
+        loc: &Location<'a>,
+    ) -> [usize; K]
+    where
+        S: ShapeArgument,
+    {
+        match self._loc_try_unpack_shape(shape, keys, env, loc) {
+            Ok(values) => values,
+            Err(msg) => panic!("{msg}"),
+        }
+    }
+
     /// Try and match and unpack `K` keys from a shape pattern.
+    ///
+    /// ## Generics
+    ///
+    /// - `K`: the length of the `keys` array.
+    ///
+    /// ## Arguments
+    ///
+    /// - `shape`: the shape to match.
+    /// - `keys`: the bound keys to export.
+    /// - `env`: the params which are already bound.
+    ///
+    /// ## Returns
+    ///
+    /// A `Result<[usize; K], String>` of the unpacked `keys` values.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use bimm_contracts::{shape_contract, run_periodically, ShapeContract};
+    ///
+    /// let shape = [1, 2, 3, 2 * 8, 3 * 8, 4];
+    ///
+    /// // Statically allocated contract.
+    /// static CONTRACT : ShapeContract = shape_contract![
+    ///    ...,
+    ///    "height" = "h_wins" * "window",
+    ///    "width" = "w_wins" * "window",
+    ///    "channels",
+    /// ];
+    ///
+    /// // Unpack the shape, given the bindings; or throw.
+    /// let [h, w, c] = CONTRACT.try_unpack_shape(
+    ///     &shape,
+    ///     &["h_wins", "w_wins", "channels"],
+    ///     &[("window", 8)]
+    /// ).unwrap();
+    /// assert_eq!(h, 2);
+    /// assert_eq!(w, 3);
+    /// assert_eq!(c, 4);
+    /// ```
     #[track_caller]
     pub fn try_unpack_shape<S, const K: usize>(
         &'a self,
         shape: S,
-        select: &[usize],
+        keys: &[&'a str; K],
+        env: StackEnvironment<'a>,
+    ) -> Result<[usize; K], String>
+    where
+        S: ShapeArgument,
+    {
+        self._loc_try_unpack_shape(shape, keys, env, &Location::caller())
+    }
+
+    fn _loc_try_unpack_shape<S, const K: usize>(
+        &'a self,
+        shape: S,
+        keys: &[&'a str; K],
+        env: StackEnvironment<'a>,
+        loc: &Location<'a>,
+    ) -> Result<[usize; K], String>
+    where
+        S: ShapeArgument,
+    {
+        let selection = self.expect_keys_to_selection(keys);
+
+        let mut scratch: Vec<Option<isize>> = Vec::with_capacity(self.index.len());
+        scratch.fill_with(|| None);
+        for (k, v) in env.iter() {
+            let v = *v as isize;
+            scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
+        }
+
+        let selected: [isize; K] =
+            self._loc_try_select(shape, &selection, scratch.as_mut_slice(), loc)?;
+
+        let result: [usize; K] = selected
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<usize>>()
+            .try_into()
+            .unwrap();
+
+        Ok(result)
+    }
+
+    /// Convert a list of keys to a selection.
+    pub fn expect_keys_to_selection<const D: usize>(&'a self, keys: &[&'a str; D]) -> [usize; D] {
+        let mut selection = [0; D];
+        for (i, key) in keys.iter().enumerate() {
+            selection[i] = self.maybe_key_to_index(*key).unwrap();
+        }
+        selection
+    }
+
+    /// Convert a key to an index.
+    pub fn maybe_key_to_index(&self, key: &str) -> Option<usize> {
+        self.index.iter().position(|&s| s == key)
+    }
+
+    /// Try and match and unpack `K` keys from a shape pattern.
+    #[track_caller]
+    fn try_select<S, const K: usize>(
+        &'a self,
+        shape: S,
+        selection: &[usize; K],
         env: &mut [Option<isize>],
+    ) -> Result<[isize; K], String>
+    where
+        S: ShapeArgument,
+    {
+        self._loc_try_select(shape, selection, env, &Location::caller())
+    }
+
+    fn _loc_try_select<S, const K: usize>(
+        &'a self,
+        shape: S,
+        selection: &[usize; K],
+        env: &mut [Option<isize>],
+        loc: &Location<'a>,
     ) -> Result<[isize; K], String>
     where
         S: ShapeArgument,
@@ -197,13 +494,11 @@ impl<'a> SlotShapeContract<'a> {
         let num_slots = self.index.len();
         assert_eq!(env.len(), num_slots);
 
-        let location = Location::caller();
-
-        self.format_resolve(shape, env, location)
+        self.format_resolve(shape, env, loc)
             .expect("Shape should match pattern");
 
         let mut out = [0; K];
-        for (i, &k) in select.iter().enumerate() {
+        for (i, &k) in selection.iter().enumerate() {
             out[i] = env[k].unwrap();
         }
         Ok(out)
@@ -221,7 +516,7 @@ impl<'a> SlotShapeContract<'a> {
     ///
     /// - `Ok(())`: if the shape matches the pattern; will update the `env`.
     /// - `Err(&str)`: if the shape does not match the pattern, with an error message.
-    pub fn format_resolve<S>(
+    pub(crate) fn format_resolve<S>(
         &'a self,
         shape: S,
         env: &mut [Option<isize>],
@@ -248,7 +543,7 @@ impl<'a> SlotShapeContract<'a> {
         }
     }
 
-    /// TODO
+    /// Low-level resolver.
     pub fn _resolve(&'a self, shape: &[usize], env: &mut [Option<isize>]) -> Result<(), String> {
         let rank = shape.len();
 

@@ -300,29 +300,30 @@ impl<'a> SlotDimExpr<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slots::slot_map::SlotIndex;
     use alloc::format;
     use alloc::string::String;
 
     #[test]
     fn test_format() {
-        static INDEX: SlotIndex = SlotIndex {
-            keys: &["a", "b", "c", "d", "e"],
-        };
+        static INDEX: [&str; 5] = ["a", "b", "c", "d", "e"];
 
         fn fmt(expr: &SlotDimExpr) -> String {
             format!(
                 "{}",
                 ExprDisplayAdapter {
                     expr: &expr,
-                    index: &INDEX.keys
+                    index: &INDEX
                 }
             )
         }
 
         assert_eq!(
             fmt(&SlotDimExpr::Param {
-                id: INDEX.slot("a")
+                id: INDEX
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, k)| if *k == "a" { Some(i) } else { None })
+                    .unwrap()
             }),
             "a"
         );
