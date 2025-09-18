@@ -40,7 +40,7 @@ pub enum SlotDimExpr<'a> {
     },
 }
 
-/// Display Adapter to format SlotDimExprs with a SlotIndex.
+/// Display Adapter to format `SlotDimExprs` with a `SlotIndex`.
 pub struct ExprDisplayAdapter<'a> {
     /// Slot index.
     pub index: &'a [&'a str],
@@ -80,7 +80,7 @@ impl<'a> Display for ExprDisplayAdapter<'a> {
                         f,
                         "{}",
                         ExprDisplayAdapter {
-                            expr: expr,
+                            expr,
                             index: self.index
                         }
                     )?;
@@ -97,7 +97,7 @@ impl<'a> Display for ExprDisplayAdapter<'a> {
                         f,
                         "{}",
                         ExprDisplayAdapter {
-                            expr: expr,
+                            expr,
                             index: self.index
                         }
                     )?;
@@ -183,7 +183,7 @@ impl<'a> SlotDimExpr<'a> {
 
         match self {
             SlotDimExpr::Param { id } => match env[*id] {
-                Some(value) => EvalResult::Value { value: value },
+                Some(value) => EvalResult::Value { value },
                 None => EvalResult::UnboundParams { count: 1 },
             },
             SlotDimExpr::Negate { child } => match child.try_eval(env) {

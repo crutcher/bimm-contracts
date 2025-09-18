@@ -124,7 +124,7 @@ impl<'a> SlotDimMatcher<'a> {
     }
 }
 
-/// Display Adapter to format SlotDimMatchers with a SlotIndex.
+/// Display Adapter to format `SlotDimMatchers` with a `SlotIndex`.
 pub struct MatcherDisplayAdapter<'a> {
     index: &'a [&'a str],
     matcher: &'a SlotDimMatcher<'a>,
@@ -143,7 +143,7 @@ impl<'a> Display for MatcherDisplayAdapter<'a> {
                 "{}",
                 ExprDisplayAdapter {
                     index: self.index,
-                    expr: expr
+                    expr
                 }
             ),
         }
@@ -462,7 +462,7 @@ impl<'a> SlotShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        self._loc_try_unpack_shape(shape, keys, env, &Location::caller())
+        self._loc_try_unpack_shape(shape, keys, env, Location::caller())
     }
 
     fn _loc_try_unpack_shape<S, const K: usize>(
@@ -500,7 +500,7 @@ impl<'a> SlotShapeContract<'a> {
     pub fn expect_keys_to_selection<const D: usize>(&'a self, keys: &[&'a str; D]) -> [usize; D] {
         let mut selection = [0; D];
         for (i, key) in keys.iter().enumerate() {
-            selection[i] = self.maybe_key_to_index(*key).unwrap();
+            selection[i] = self.maybe_key_to_index(key).unwrap();
         }
         selection
     }
@@ -521,7 +521,7 @@ impl<'a> SlotShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        self._loc_try_select(shape, selection, env, &Location::caller())
+        self._loc_try_select(shape, selection, env, Location::caller())
     }
 
     fn _loc_try_select<S, const K: usize>(
