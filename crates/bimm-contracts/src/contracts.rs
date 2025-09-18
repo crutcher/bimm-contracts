@@ -37,7 +37,7 @@
 use crate::StackEnvironment;
 use crate::expressions::{DimExpr, ExprDisplayAdapter, MatchResult};
 use crate::shape_argument::ShapeArgument;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt::{Display, Formatter};
@@ -328,7 +328,15 @@ impl<'a> ShapeContract<'a> {
         let mut scratch: Vec<Option<isize>> = vec![None; self.index.len()];
         for (k, v) in env.iter() {
             let v = *v as isize;
-            scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
+            match self.maybe_key_to_index(k) {
+                Some(param_id) => scratch[param_id] = Some(v),
+                None => {
+                    return Err(
+                        format!("The key \"{k}\" is not indexed in the contract:\n{self}")
+                            .to_string(),
+                    );
+                }
+            }
         }
 
         self.format_resolve(shape, scratch.as_mut_slice(), loc)
@@ -480,7 +488,15 @@ impl<'a> ShapeContract<'a> {
         let mut scratch: Vec<Option<isize>> = vec![None; self.index.len()];
         for (k, v) in env.iter() {
             let v = *v as isize;
-            scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
+            match self.maybe_key_to_index(k) {
+                Some(param_id) => scratch[param_id] = Some(v),
+                None => {
+                    return Err(
+                        format!("The key \"{k}\" is not indexed in the contract:\n{self}")
+                            .to_string(),
+                    );
+                }
+            }
         }
 
         let selected: [isize; K] =
@@ -500,7 +516,10 @@ impl<'a> ShapeContract<'a> {
     pub fn expect_keys_to_selection<const D: usize>(&'a self, keys: &[&'a str; D]) -> [usize; D] {
         let mut selection = [0; D];
         for (i, key) in keys.iter().enumerate() {
-            selection[i] = self.maybe_key_to_index(key).unwrap();
+            match self.maybe_key_to_index(key) {
+                Some(param_id) => selection[i] = param_id,
+                None => panic!("The key \"{key}\" is not indexed in the contract:\n{self}"),
+            }
         }
         selection
     }
