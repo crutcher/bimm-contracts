@@ -36,7 +36,6 @@
 
 use crate::shape_argument::ShapeArgument;
 use crate::slots::slot_expressions::{ExprDisplayAdapter, MatchResult, SlotDimExpr};
-use crate::slots::slot_map::{MutableSlotBindings, OverlaySlots, SlotBindings};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -190,29 +189,22 @@ impl<'a> SlotShapeContract<'a> {
         &'a self,
         shape: S,
         select: &[usize],
-        bindings: &[Option<isize>],
-        scratch: &mut [Option<isize>],
+        env: &mut [Option<isize>],
     ) -> Result<[isize; K], String>
     where
         S: ShapeArgument,
     {
         let num_slots = self.index.len();
-        assert_eq!(bindings.len(), num_slots);
-        assert_eq!(scratch.len(), num_slots);
+        assert_eq!(env.len(), num_slots);
 
         let location = Location::caller();
 
-        let mut mut_env = OverlaySlots {
-            backing: bindings,
-            overlay: scratch,
-        };
-
-        self.format_resolve(shape, &mut mut_env, location)
+        self.format_resolve(shape, env, location)
             .expect("Shape should match pattern");
 
         let mut out = [0; K];
         for (i, &k) in select.iter().enumerate() {
-            out[i] = mut_env.get_slot(k).unwrap();
+            out[i] = env[k].unwrap();
         }
         Ok(out)
     }
@@ -232,7 +224,7 @@ impl<'a> SlotShapeContract<'a> {
     pub fn format_resolve<S>(
         &'a self,
         shape: S,
-        env: &mut OverlaySlots,
+        env: &mut [Option<isize>],
         location: &Location,
     ) -> Result<(), String>
     where
@@ -247,7 +239,7 @@ impl<'a> SlotShapeContract<'a> {
                 location.line(),
                 self.index
                     .iter()
-                    .zip(env.to_vec().iter())
+                    .zip(env.iter())
                     .filter(|(_, v)| v.is_some())
                     .map(|(k, v)| format!("\"{}\": {}", *k, v.unwrap()))
                     .collect::<Vec<_>>()
@@ -256,7 +248,8 @@ impl<'a> SlotShapeContract<'a> {
         }
     }
 
-    fn _resolve(&'a self, shape: &[usize], env: &mut OverlaySlots) -> Result<(), String> {
+    /// TODO
+    pub fn _resolve(&'a self, shape: &[usize], env: &mut [Option<isize>]) -> Result<(), String> {
         let rank = shape.len();
 
         let fail_at = |shape_idx: usize, term_idx: usize, msg: &str| -> String {
@@ -288,14 +281,14 @@ impl<'a> SlotShapeContract<'a> {
 
             let matcher = &self.terms[term_idx];
             if let Some(label_id) = matcher.label_id() {
-                match env.get_slot(label_id) {
+                match env[label_id] {
                     Some(value) => {
                         if value != dim_size {
                             return Err(fail_at(shape_idx, term_idx, "Value MissMatch."));
                         }
                     }
                     None => {
-                        env.set_slot(label_id, dim_size);
+                        env[label_id] = Some(dim_size);
                     }
                 }
             }
@@ -314,7 +307,7 @@ impl<'a> SlotShapeContract<'a> {
                     return Err(fail_at(shape_idx, term_idx, "Value MissMatch."));
                 }
                 Ok(MatchResult::ParamConstraint { id, value }) => {
-                    env.set_slot(id, value);
+                    env[id] = Some(value);
                 }
                 Err(msg) => return Err(fail_at(shape_idx, term_idx, msg)),
             }

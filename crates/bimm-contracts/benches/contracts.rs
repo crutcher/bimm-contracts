@@ -54,9 +54,7 @@ fn bench_slot_unpack_shape(c: &mut Criterion) {
         ellipsis_pos: Some(2),
     };
 
-    let mut scratch = [None; 6];
-
-    let env = [
+    let bindings = [
         None,
         None,
         None,
@@ -64,16 +62,12 @@ fn bench_slot_unpack_shape(c: &mut Criterion) {
         None,
         Some(CHANNELS as isize),
     ];
+
+    // thread_local! { static SCRATCH: RefCell<Vec<Option<isize>>> = RefCell::new(vec![None; 6]); }
     c.bench_function("unpack_shape w/slots", |b| {
         b.iter(|| {
-            let [b, h, w, c] = S_PATTERN
-                .try_unpack_shape(&shape, &[0, 1, 2, 4], &env, &mut scratch)
-                .unwrap();
-
-            assert_eq!(b, BATCH as isize);
-            assert_eq!(h, HEIGHT as isize);
-            assert_eq!(w, WIDTH as isize);
-            assert_eq!(c, COLOR as isize);
+            let mut env = bindings;
+            S_PATTERN._resolve(&shape, &mut env).unwrap()
         })
     });
 }

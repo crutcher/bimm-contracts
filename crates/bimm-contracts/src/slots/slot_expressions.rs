@@ -1,7 +1,6 @@
 //! # Dimension Expressions.
 
 use crate::math::maybe_iroot;
-use crate::slots::slot_map::SlotBindings;
 use core::fmt::{Display, Formatter};
 
 /// A stack/static expression algebra for dimension sizes.
@@ -159,20 +158,14 @@ impl<'a> SlotDimExpr<'a> {
     /// * `Value(value)` - the evaluated value of the expression.
     /// * `UnboundParams(count)` - the count of unbound parameters.
     #[must_use]
-    fn try_eval<E>(&self, env: &E) -> EvalResult
-    where
-        E: SlotBindings,
-    {
+    fn try_eval(&self, env: &[Option<isize>]) -> EvalResult {
         #[inline(always)]
-        fn reduce_children<'a, E>(
+        fn reduce_children<'a>(
             exprs: &'a [SlotDimExpr<'a>],
-            env: &E,
+            env: &[Option<isize>],
             zero: isize,
             op: fn(&mut isize, isize),
-        ) -> EvalResult
-        where
-            E: SlotBindings,
-        {
+        ) -> EvalResult {
             let mut value = zero;
             let mut count = 0;
             for expr in exprs {
@@ -189,7 +182,7 @@ impl<'a> SlotDimExpr<'a> {
         }
 
         match self {
-            SlotDimExpr::Param { id } => match env.get_slot(*id) {
+            SlotDimExpr::Param { id } => match env[*id] {
                 Some(value) => EvalResult::Value { value: value },
                 None => EvalResult::UnboundParams { count: 1 },
             },
@@ -226,20 +219,18 @@ impl<'a> SlotDimExpr<'a> {
     /// * `Ok(MatchResult::Constraint(name, value))` if the expression can be solved for a single unbound parameter.
     /// * `Ok(MatchResult::UnderConstrained)` if the expression cannot be solved with the current bindings.
     #[must_use]
-    pub fn try_match<E>(&self, target: isize, env: &E) -> Result<MatchResult, &'static str>
-    where
-        E: SlotBindings,
-    {
+    pub fn try_match(
+        &self,
+        target: isize,
+        env: &[Option<isize>],
+    ) -> Result<MatchResult, &'static str> {
         #[inline(always)]
-        fn reduce_children<'a, E>(
+        fn reduce_children<'a>(
             exprs: &'a [SlotDimExpr<'a>],
-            env: &E,
+            env: &[Option<isize>],
             zero: isize,
             op: fn(&mut isize, isize),
-        ) -> Result<(isize, Option<&'a SlotDimExpr<'a>>), &'static str>
-        where
-            E: SlotBindings,
-        {
+        ) -> Result<(isize, Option<&'a SlotDimExpr<'a>>), &'static str> {
             let mut partial_value: isize = zero;
             let mut rem_expr = None;
             // At most one child can be unbound, and by only one parameter.
@@ -263,7 +254,7 @@ impl<'a> SlotDimExpr<'a> {
         match self {
             SlotDimExpr::Param { id } => {
                 let id = *id;
-                if let Some(value) = env.get_slot(id) {
+                if let Some(value) = env[id] {
                     if value == target {
                         Ok(MatchResult::Match)
                     } else {
