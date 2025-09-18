@@ -41,27 +41,23 @@ pub enum SlotDimExpr<'a> {
     },
 }
 
-impl SlotDimExpr<'_> {
-    /// Format an expression with a slot map.
-    pub fn format(&self, f: &mut Formatter<'_>, index: &[&str]) -> core::fmt::Result {
-        DisplayAdapter { expr: self, index }.fmt(f)
-    }
-}
-
 /// Display Adapter to format SlotDimExprs with a SlotIndex.
-pub struct DisplayAdapter<'a> {
-    expr: &'a SlotDimExpr<'a>,
-    index: &'a [&'a str],
+pub struct ExprDisplayAdapter<'a> {
+    /// Slot index.
+    pub index: &'a [&'a str],
+
+    /// Expression to format.
+    pub expr: &'a SlotDimExpr<'a>,
 }
 
-impl<'a> Display for DisplayAdapter<'a> {
+impl<'a> Display for ExprDisplayAdapter<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         match self.expr {
             SlotDimExpr::Param { id } => write!(f, "{}", self.index[*id]),
             SlotDimExpr::Negate { child } => write!(
                 f,
                 "(-{})",
-                DisplayAdapter {
+                ExprDisplayAdapter {
                     expr: child,
                     index: self.index
                 }
@@ -69,7 +65,7 @@ impl<'a> Display for DisplayAdapter<'a> {
             SlotDimExpr::Pow { base: child, exp } => write!(
                 f,
                 "({}^{})",
-                DisplayAdapter {
+                ExprDisplayAdapter {
                     expr: child,
                     index: self.index
                 },
@@ -84,7 +80,7 @@ impl<'a> Display for DisplayAdapter<'a> {
                     write!(
                         f,
                         "{}",
-                        DisplayAdapter {
+                        ExprDisplayAdapter {
                             expr: expr,
                             index: self.index
                         }
@@ -101,7 +97,7 @@ impl<'a> Display for DisplayAdapter<'a> {
                     write!(
                         f,
                         "{}",
-                        DisplayAdapter {
+                        ExprDisplayAdapter {
                             expr: expr,
                             index: self.index
                         }
@@ -326,7 +322,7 @@ mod tests {
         fn fmt(expr: &SlotDimExpr) -> String {
             format!(
                 "{}",
-                DisplayAdapter {
+                ExprDisplayAdapter {
                     expr: &expr,
                     index: &INDEX.keys
                 }

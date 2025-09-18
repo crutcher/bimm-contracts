@@ -2,6 +2,7 @@
 //!
 //! Fast mutable maps with limited discrete key spaces.
 
+use alloc::vec::Vec;
 use core::fmt::Debug;
 
 /// Key-To-Index Slot Mapping.
@@ -49,6 +50,18 @@ pub trait SlotBindings {
     ///
     /// An `Option<isize>`.
     fn get_slot(&self, slot: usize) -> Option<isize>;
+
+    /// Get the number of slots.
+    fn num_slots(&self) -> usize;
+
+    /// Flatten the slots into a vec.
+    fn to_vec(&self) -> Vec<Option<isize>> {
+        let mut vec = Vec::with_capacity(self.num_slots());
+        for i in 0..self.num_slots() {
+            vec.push(self.get_slot(i));
+        }
+        vec
+    }
 }
 
 /// Mutable slot bindings.
@@ -63,6 +76,10 @@ pub trait MutableSlotBindings: SlotBindings {
 }
 
 impl<const D: usize> SlotBindings for [Option<isize>; D] {
+    fn num_slots(&self) -> usize {
+        D
+    }
+
     fn get_slot(&self, slot: usize) -> Option<isize> {
         self[slot].clone()
     }
@@ -74,6 +91,10 @@ impl<const D: usize> MutableSlotBindings for [Option<isize>; D] {
 }
 
 impl SlotBindings for [Option<isize>] {
+    fn num_slots(&self) -> usize {
+        self.len()
+    }
+
     fn get_slot(&self, slot: usize) -> Option<isize> {
         self[slot].clone()
     }
@@ -94,8 +115,12 @@ pub struct OverlaySlots<'a> {
 }
 
 impl<'a> SlotBindings for OverlaySlots<'a> {
+    fn num_slots(&self) -> usize {
+        self.overlay.len()
+    }
+
     fn get_slot(&self, slot: usize) -> Option<isize> {
-        self.overlay[slot].or_else(|| self.backing[slot])
+        self.overlay[slot].or_else(|| self.backing.get_slot(slot))
     }
 }
 

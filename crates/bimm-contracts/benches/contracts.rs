@@ -1,3 +1,5 @@
+use bimm_contracts::slots::slot_contracts::{SlotDimMatcher, SlotShapeContract};
+use bimm_contracts::slots::slot_expressions::SlotDimExpr;
 use bimm_contracts::{DimExpr, DimMatcher, ShapeContract, run_periodically};
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -17,6 +19,64 @@ static WIDTH: usize = 2;
 static PADDING: usize = 4;
 static CHANNELS: usize = 5;
 static COLOR: usize = 4;
+
+fn bench_slot_unpack_shape(c: &mut Criterion) {
+    let shape = [
+        12,
+        BATCH,
+        1,
+        2,
+        3,
+        HEIGHT * PADDING,
+        WIDTH * PADDING,
+        COLOR * COLOR * COLOR,
+        CHANNELS,
+    ];
+
+    static S_PATTERN: SlotShapeContract = SlotShapeContract {
+        index: &["batch", "height", "width", "padding", "color", "channels"],
+        terms: &[
+            SlotDimMatcher::any(),
+            SlotDimMatcher::expr(SlotDimExpr::Param { id: 0 }),
+            SlotDimMatcher::ellipsis(),
+            SlotDimMatcher::expr(SlotDimExpr::Prod {
+                children: &[SlotDimExpr::Param { id: 1 }, SlotDimExpr::Param { id: 3 }],
+            }),
+            SlotDimMatcher::expr(SlotDimExpr::Prod {
+                children: &[SlotDimExpr::Param { id: 2 }, SlotDimExpr::Param { id: 3 }],
+            }),
+            SlotDimMatcher::expr(SlotDimExpr::Pow {
+                base: &SlotDimExpr::Param { id: 4 },
+                exp: 3,
+            }),
+            SlotDimMatcher::expr(SlotDimExpr::Param { id: 5 }),
+        ],
+        ellipsis_pos: Some(2),
+    };
+
+    let mut scratch = [None; 6];
+
+    let env = [
+        None,
+        None,
+        None,
+        Some(PADDING as isize),
+        None,
+        Some(CHANNELS as isize),
+    ];
+    c.bench_function("unpack_shape w/slots", |b| {
+        b.iter(|| {
+            let [b, h, w, c] = S_PATTERN
+                .try_unpack_shape(&shape, &[0, 1, 2, 4], &env, &mut scratch)
+                .unwrap();
+
+            assert_eq!(b, BATCH as isize);
+            assert_eq!(h, HEIGHT as isize);
+            assert_eq!(w, WIDTH as isize);
+            assert_eq!(c, COLOR as isize);
+        })
+    });
+}
 
 fn bench_unpack_shape(c: &mut Criterion) {
     let shape = [
@@ -92,6 +152,7 @@ fn bench_assert_shape_every_nth(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_slot_unpack_shape,
     bench_unpack_shape,
     bench_assert_shape,
     bench_assert_shape_every_nth
