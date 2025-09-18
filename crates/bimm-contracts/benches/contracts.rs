@@ -29,7 +29,7 @@ fn bench_slot_unpack_shape(c: &mut Criterion) {
         3,
         HEIGHT * PADDING,
         WIDTH * PADDING,
-        COLOR * COLOR * COLOR,
+        COLOR,
         CHANNELS,
     ];
 
@@ -45,10 +45,7 @@ fn bench_slot_unpack_shape(c: &mut Criterion) {
             SlotDimMatcher::expr(SlotDimExpr::Prod {
                 children: &[SlotDimExpr::Param { id: 2 }, SlotDimExpr::Param { id: 3 }],
             }),
-            SlotDimMatcher::expr(SlotDimExpr::Pow {
-                base: &SlotDimExpr::Param { id: 4 },
-                exp: 3,
-            }),
+            SlotDimMatcher::expr(SlotDimExpr::Param { id: 4 }),
             SlotDimMatcher::expr(SlotDimExpr::Param { id: 5 }),
         ],
         ellipsis_pos: Some(2),
