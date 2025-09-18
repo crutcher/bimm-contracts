@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! # Shape Contracts.
 //!
 //! `bimm-contracts` is built around the [`ShapeContract`] interface.
@@ -33,12 +34,12 @@
 //! assert_eq!(w_wins, 3);
 //! ```
 
-use crate::bindings::{MutableStackEnvironment, MutableStackMap, StackEnvironment, StackMap};
-use crate::expressions::{DimExpr, TryMatchResult};
+use crate::StackEnvironment;
+use crate::expressions::{DimExpr, ExprDisplayAdapter, MatchResult};
 use crate::shape_argument::ShapeArgument;
-use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt::{Display, Formatter};
 use core::panic::Location;
 
@@ -50,19 +51,19 @@ pub enum DimMatcher<'a> {
     /// Matches any dimension size.
     Any {
         /// An optional label for the matcher.
-        label: Option<&'a str>,
+        label_id: Option<usize>,
     },
 
     /// Matches a variable number of dimensions (ellipsis).
     Ellipsis {
         /// An optional label for the matcher.
-        label: Option<&'a str>,
+        label_id: Option<usize>,
     },
 
     /// A dimension size expression that must match a specific value.
     Expr {
         /// An optional label for the matcher.
-        label: Option<&'a str>,
+        label_id: Option<usize>,
 
         /// The dimension expression that must match a specific value.
         expr: DimExpr<'a>,
@@ -72,12 +73,12 @@ pub enum DimMatcher<'a> {
 impl<'a> DimMatcher<'a> {
     /// Create a new `DimMatcher` that matches any dimension size.
     pub const fn any() -> Self {
-        DimMatcher::Any { label: None }
+        DimMatcher::Any { label_id: None }
     }
 
     /// Create a new `DimMatcher` that matches a variable number of dimensions (ellipsis).
     pub const fn ellipsis() -> Self {
-        DimMatcher::Ellipsis { label: None }
+        DimMatcher::Ellipsis { label_id: None }
     }
 
     /// Create a new `DimMatcher` from a dimension expression.
@@ -90,15 +91,18 @@ impl<'a> DimMatcher<'a> {
     ///
     /// A new `DimMatcher` that matches the given expression.
     pub const fn expr(expr: DimExpr<'a>) -> Self {
-        DimMatcher::Expr { label: None, expr }
+        DimMatcher::Expr {
+            label_id: None,
+            expr,
+        }
     }
 
     /// Get the label of the matcher, if any.
-    pub const fn label(&self) -> Option<&'a str> {
+    pub const fn label_id(&self) -> Option<usize> {
         match self {
-            DimMatcher::Any { label } => *label,
-            DimMatcher::Ellipsis { label } => *label,
-            DimMatcher::Expr { label, .. } => *label,
+            DimMatcher::Any { label_id } => *label_id,
+            DimMatcher::Ellipsis { label_id } => *label_id,
+            DimMatcher::Expr { label_id, .. } => *label_id,
         }
     }
 
@@ -106,29 +110,42 @@ impl<'a> DimMatcher<'a> {
     ///
     /// ## Arguments
     ///
-    /// - `label`: an optional label to attach to the matcher.
+    /// - `label_id`: an optional label to attach to the matcher.
     ///
     /// ## Returns
     ///
     /// A new `DimMatcher` with the label attached.
-    pub const fn with_label(self, label: Option<&'a str>) -> Self {
+    pub const fn with_label_id(self, label_id: Option<usize>) -> Self {
         match self {
-            DimMatcher::Any { .. } => DimMatcher::Any { label },
-            DimMatcher::Ellipsis { .. } => DimMatcher::Ellipsis { label },
-            DimMatcher::Expr { expr, .. } => DimMatcher::Expr { label, expr },
+            DimMatcher::Any { .. } => DimMatcher::Any { label_id },
+            DimMatcher::Ellipsis { .. } => DimMatcher::Ellipsis { label_id },
+            DimMatcher::Expr { expr, .. } => DimMatcher::Expr { label_id, expr },
         }
     }
 }
 
-impl Display for DimMatcher<'_> {
+/// Display Adapter to format `DimMatchers` with a `Index`.
+pub struct MatcherDisplayAdapter<'a> {
+    index: &'a [&'a str],
+    matcher: &'a DimMatcher<'a>,
+}
+
+impl<'a> Display for MatcherDisplayAdapter<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        if let Some(label) = self.label() {
-            write!(f, "{label}=")?;
+        if let Some(label_id) = self.matcher.label_id() {
+            write!(f, "{}=", self.index[label_id])?;
         }
-        match self {
-            DimMatcher::Any { label: _ } => write!(f, "_"),
-            DimMatcher::Ellipsis { label: _ } => write!(f, "..."),
-            DimMatcher::Expr { label: _, expr } => write!(f, "{expr}"),
+        match self.matcher {
+            DimMatcher::Any { .. } => write!(f, "_"),
+            DimMatcher::Ellipsis { .. } => write!(f, "..."),
+            DimMatcher::Expr { expr, .. } => write!(
+                f,
+                "{}",
+                ExprDisplayAdapter {
+                    index: self.index,
+                    expr
+                }
+            ),
         }
     }
 }
@@ -136,6 +153,9 @@ impl Display for DimMatcher<'_> {
 /// A shape pattern, which is a sequence of terms that can match a shape.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShapeContract<'a> {
+    /// The slot index of the contract.
+    pub index: &'a [&'a str],
+
     /// The terms in the pattern.
     pub terms: &'a [DimMatcher<'a>],
 
@@ -146,11 +166,18 @@ pub struct ShapeContract<'a> {
 impl Display for ShapeContract<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         write!(f, "[")?;
-        for (idx, expr) in self.terms.iter().enumerate() {
+        for (idx, term) in self.terms.iter().enumerate() {
             if idx > 0 {
                 write!(f, ", ")?;
             }
-            write!(f, "{expr}")?;
+            write!(
+                f,
+                "{}",
+                MatcherDisplayAdapter {
+                    index: self.index,
+                    matcher: term
+                }
+            )?;
         }
         write!(f, "]")
     }
@@ -181,12 +208,12 @@ impl<'a> ShapeContract<'a> {
     ///    "channels",
     /// ];
     /// ```
-    pub const fn new(terms: &'a [DimMatcher<'a>]) -> Self {
+    pub const fn new(index: &'a [&'a str], terms: &'a [DimMatcher<'a>]) -> Self {
         let mut i = 0;
         let mut ellipsis_pos: Option<usize> = None;
 
         while i < terms.len() {
-            if matches!(terms[i], DimMatcher::Ellipsis { label: _ }) {
+            if matches!(terms[i], DimMatcher::Ellipsis { .. }) {
                 match ellipsis_pos {
                     Some(_) => panic!("Multiple ellipses in pattern"),
                     None => ellipsis_pos = Some(i),
@@ -196,6 +223,7 @@ impl<'a> ShapeContract<'a> {
         }
 
         ShapeContract {
+            index,
             terms,
             ellipsis_pos,
         }
@@ -241,7 +269,7 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        match self._try_assert_shape(shape, env, Location::caller()) {
+        match self._loc_try_assert_shape(shape, env, Location::caller()) {
             Ok(()) => (),
             Err(msg) => panic!("{}", msg),
         }
@@ -285,10 +313,10 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        self._try_assert_shape(shape, env, Location::caller())
+        self._loc_try_assert_shape(shape, env, Location::caller())
     }
 
-    fn _try_assert_shape<S>(
+    fn _loc_try_assert_shape<S>(
         &'a self,
         shape: S,
         env: StackEnvironment<'a>,
@@ -297,9 +325,13 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        let mut mut_env = MutableStackEnvironment::new(env);
+        let mut scratch: Vec<Option<isize>> = vec![None; self.index.len()];
+        for (k, v) in env.iter() {
+            let v = *v as isize;
+            scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
+        }
 
-        self.try_resolve_match(shape, &mut mut_env, loc)
+        self.format_resolve(shape, scratch.as_mut_slice(), loc)
     }
 
     /// Match and unpack `K` keys from a shape pattern.
@@ -360,12 +392,10 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        self._unpack_shape(shape, keys, env, Location::caller())
+        self._loc_unpack_shape(shape, keys, env, Location::caller())
     }
 
-    #[must_use]
-    #[track_caller]
-    fn _unpack_shape<S, const K: usize>(
+    fn _loc_unpack_shape<S, const K: usize>(
         &'a self,
         shape: S,
         keys: &[&'a str; K],
@@ -375,7 +405,7 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        match self._try_unpack_shape(shape, keys, env, loc) {
+        match self._loc_try_unpack_shape(shape, keys, env, loc) {
             Ok(values) => values,
             Err(msg) => panic!("{msg}"),
         }
@@ -422,7 +452,6 @@ impl<'a> ShapeContract<'a> {
     /// assert_eq!(w, 3);
     /// assert_eq!(c, 4);
     /// ```
-    #[must_use]
     #[track_caller]
     pub fn try_unpack_shape<S, const K: usize>(
         &'a self,
@@ -433,11 +462,10 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        self._try_unpack_shape(shape, keys, env, Location::caller())
+        self._loc_try_unpack_shape(shape, keys, env, Location::caller())
     }
 
-    #[must_use]
-    fn _try_unpack_shape<S, const K: usize>(
+    fn _loc_try_unpack_shape<S, const K: usize>(
         &'a self,
         shape: S,
         keys: &[&'a str; K],
@@ -447,11 +475,76 @@ impl<'a> ShapeContract<'a> {
     where
         S: ShapeArgument,
     {
-        let mut mut_env = MutableStackEnvironment::new(env);
+        let selection = self.expect_keys_to_selection(keys);
 
-        self.try_resolve_match(shape, &mut mut_env, loc)?;
+        let mut scratch: Vec<Option<isize>> = vec![None; self.index.len()];
+        for (k, v) in env.iter() {
+            let v = *v as isize;
+            scratch[self.maybe_key_to_index(k).unwrap()] = Some(v);
+        }
 
-        Ok(mut_env.export_key_values(keys))
+        let selected: [isize; K] =
+            self._loc_try_select(shape, &selection, scratch.as_mut_slice(), loc)?;
+
+        let result: [usize; K] = selected
+            .into_iter()
+            .map(|v| v as usize)
+            .collect::<Vec<usize>>()
+            .try_into()
+            .unwrap();
+
+        Ok(result)
+    }
+
+    /// Convert a list of keys to a selection.
+    pub fn expect_keys_to_selection<const D: usize>(&'a self, keys: &[&'a str; D]) -> [usize; D] {
+        let mut selection = [0; D];
+        for (i, key) in keys.iter().enumerate() {
+            selection[i] = self.maybe_key_to_index(key).unwrap();
+        }
+        selection
+    }
+
+    /// Convert a key to an index.
+    pub fn maybe_key_to_index(&self, key: &str) -> Option<usize> {
+        self.index.iter().position(|&s| s == key)
+    }
+
+    /// Try and match and unpack `K` keys from a shape pattern.
+    #[track_caller]
+    fn try_select<S, const K: usize>(
+        &'a self,
+        shape: S,
+        selection: &[usize; K],
+        env: &mut [Option<isize>],
+    ) -> Result<[isize; K], String>
+    where
+        S: ShapeArgument,
+    {
+        self._loc_try_select(shape, selection, env, Location::caller())
+    }
+
+    fn _loc_try_select<S, const K: usize>(
+        &'a self,
+        shape: S,
+        selection: &[usize; K],
+        env: &mut [Option<isize>],
+        loc: &Location<'a>,
+    ) -> Result<[isize; K], String>
+    where
+        S: ShapeArgument,
+    {
+        let num_slots = self.index.len();
+        assert_eq!(env.len(), num_slots);
+
+        self.format_resolve(shape, env, loc)
+            .expect("Shape should match pattern");
+
+        let mut out = [0; K];
+        for (i, &k) in selection.iter().enumerate() {
+            out[i] = env[k].unwrap();
+        }
+        Ok(out)
     }
 
     /// Resolve the match for the shape against the pattern.
@@ -460,50 +553,62 @@ impl<'a> ShapeContract<'a> {
     ///
     /// - `shape`: the shape to match.
     /// - `env`: the mutable environment to bind parameters.
+    /// - `location`: the location reference from ``#[track_caller]``.
     ///
     /// ## Returns
     ///
-    /// - `Ok(())`: if the shape matches the pattern.
-    /// - `Err(String)`: if the shape does not match the pattern, with an error message.
-    #[must_use]
-    fn try_resolve_match<S>(
+    /// - `Ok(())`: if the shape matches the pattern; will update the `env`.
+    /// - `Err(&str)`: if the shape does not match the pattern, with an error message.
+    pub(crate) fn format_resolve<S>(
         &'a self,
         shape: S,
-        env: &mut MutableStackEnvironment<'a>,
-        location: &Location<'a>,
+        env: &mut [Option<isize>],
+        location: &Location,
     ) -> Result<(), String>
     where
         S: ShapeArgument,
     {
-        let shape = &shape.get_shape_vec();
-
-        let fail = |msg| -> String {
-            format!(
+        let shape = shape.get_shape_vec();
+        match self._resolve(&shape, env) {
+            Ok(()) => Ok(()),
+            Err(msg) => Err(format!(
                 "at {}:{}: Shape Error\n  {msg}\nActual:\n  {shape:?}\nContract:\n  {self}\nBindings:\n  {{{}}}",
                 location.file(),
                 location.line(),
-                env.backing
+                self.index
                     .iter()
-                    .map(|(k, v)| format!("\"{k}\": {v}"))
+                    .zip(env.iter())
+                    .filter(|(_, v)| v.is_some())
+                    .map(|(k, v)| format!("\"{}\": {}", *k, v.unwrap()))
                     .collect::<Vec<_>>()
                     .join(", ")
+            )),
+        }
+    }
+
+    /// Low-level resolver.
+    pub fn _resolve(&'a self, shape: &[usize], env: &mut [Option<isize>]) -> Result<(), String> {
+        let rank = shape.len();
+
+        let fail_at = |shape_idx: usize, term_idx: usize, msg: &str| -> String {
+            format!(
+                "{} !~ {} :: {msg}",
+                shape[shape_idx],
+                MatcherDisplayAdapter {
+                    index: self.index,
+                    matcher: &self.terms[term_idx]
+                }
             )
         };
-        let fail_at = |shape_idx, term_idx, msg| -> String {
-            fail(format!(
-                "{} !~ {} :: {msg}",
-                shape[shape_idx], self.terms[term_idx]
-            ))
-        };
-
-        let rank = shape.len();
 
         let (e_start, e_size) = match self.try_ellipsis_split(rank) {
             Ok((e_start, e_size)) => (e_start, e_size),
-            Err(msg) => return Err(fail(msg)),
+            Err(msg) => return Err(msg),
         };
 
         for (shape_idx, &dim_size) in shape.iter().enumerate() {
+            let dim_size = dim_size as isize;
+
             let term_idx = if shape_idx < e_start {
                 shape_idx
             } else if shape_idx < (e_start + e_size) {
@@ -513,38 +618,34 @@ impl<'a> ShapeContract<'a> {
             };
 
             let matcher = &self.terms[term_idx];
-            if let Some(label) = matcher.label() {
-                match env.lookup(label) {
+            if let Some(label_id) = matcher.label_id() {
+                match env[label_id] {
                     Some(value) => {
                         if value != dim_size {
-                            return Err(fail_at(
-                                shape_idx,
-                                term_idx,
-                                "Value MissMatch.".to_string(),
-                            ));
+                            return Err(fail_at(shape_idx, term_idx, "Value MissMatch."));
                         }
                     }
                     None => {
-                        env.bind(label, dim_size);
+                        env[label_id] = Some(dim_size);
                     }
                 }
             }
 
             let expr = match matcher {
-                DimMatcher::Any { label: _ } => continue,
-                DimMatcher::Ellipsis { label: _ } => {
+                DimMatcher::Any { .. } => continue,
+                DimMatcher::Expr { expr, .. } => expr,
+                DimMatcher::Ellipsis { .. } => {
                     unreachable!("Ellipsis should have been handled before")
                 }
-                DimMatcher::Expr { label: _, expr } => expr,
             };
 
-            match expr.try_match(dim_size as isize, env) {
-                Ok(TryMatchResult::Match) => continue,
-                Ok(TryMatchResult::Conflict) => {
-                    return Err(fail_at(shape_idx, term_idx, "Value MissMatch.".to_string()));
+            match expr.try_match(dim_size, env) {
+                Ok(MatchResult::Match) => continue,
+                Ok(MatchResult::Conflict) => {
+                    return Err(fail_at(shape_idx, term_idx, "Value MissMatch."));
                 }
-                Ok(TryMatchResult::ParamConstraint(param_name, value)) => {
-                    env.bind(param_name, value as usize);
+                Ok(MatchResult::ParamConstraint { id, value }) => {
+                    env[id] = Some(value);
                 }
                 Err(msg) => return Err(fail_at(shape_idx, term_idx, msg)),
             }
@@ -563,7 +664,6 @@ impl<'a> ShapeContract<'a> {
     ///
     /// - `Ok((usize, usize))`: the position of the ellipsis and the number of dimensions it matches.
     /// - `Err(String)`: an error message if the pattern does not match the expected size.
-    #[must_use]
     fn try_ellipsis_split(&self, rank: usize) -> Result<(usize, usize), String> {
         let k = self.terms.len();
         match self.ellipsis_pos {
@@ -590,202 +690,29 @@ impl<'a> ShapeContract<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::{DimMatcher, ShapeContract};
-    use alloc::string::ToString;
-    use bimm_contracts_macros::shape_contract;
-    use indoc::indoc;
-
-    #[test]
-    fn test_dim_matcher_builders() {
-        assert_eq!(DimMatcher::any(), DimMatcher::Any { label: None });
-
-        assert_eq!(DimMatcher::ellipsis(), DimMatcher::Ellipsis { label: None });
-
-        assert_eq!(
-            DimMatcher::expr(DimExpr::Param("a")),
-            DimMatcher::Expr {
-                label: None,
-                expr: DimExpr::Param("a")
-            }
-        );
-    }
-
-    #[test]
-    fn test_with_label() {
-        assert_eq!(
-            DimMatcher::any().with_label(Some("abc")),
-            DimMatcher::Any { label: Some("abc") }
-        );
-
-        assert_eq!(
-            DimMatcher::ellipsis().with_label(Some("abc")),
-            DimMatcher::Ellipsis { label: Some("abc") }
-        );
-
-        assert_eq!(
-            DimMatcher::expr(DimExpr::Param("a")).with_label(Some("abc")),
-            DimMatcher::Expr {
-                label: Some("abc"),
-                expr: DimExpr::Param("a")
-            }
-        );
-    }
-
-    #[should_panic(expected = "Multiple ellipses in pattern")]
-    #[test]
-    fn test_bad_new() {
-        // Multiple ellipses in pattern should panic.
-        let _ = ShapeContract::new(&[
-            DimMatcher::any(),
-            DimMatcher::ellipsis(),
-            DimMatcher::ellipsis(),
-        ]);
-    }
-
-    #[test]
-    fn test_shape_contract_macro() {
-        /// For the shape_contract macro namespace.
-        use crate as bimm_contracts;
-        static CONTRACT: ShapeContract = shape_contract![
-            ...,
-            "height" = "hwins" * "window",
-            "width" = "wwins" * "window",
-            "color",
-        ];
-
-        let hwins = 2;
-        let wwins = 3;
-        let window = 4;
-        let color = 3;
-
-        let shape = [1, 2, 3, hwins * window, wwins * window, color];
-
-        let [u_hwins, u_wwins, u_height] = CONTRACT.unpack_shape(
-            &shape,
-            &["hwins", "wwins", "height"],
-            &[
-                ("height", hwins * window),
-                ("window", window),
-                ("color", color),
-            ],
-        );
-        assert_eq!(u_hwins, hwins);
-        assert_eq!(u_wwins, wwins);
-        assert_eq!(u_height, hwins * window);
-
-        let err = CONTRACT
-            .try_unpack_shape(
-                &shape,
-                &["hwins", "wwins"],
-                &[("window", window + 1), ("color", color)],
-            )
-            .unwrap_err();
-        let (header, body) = err.split_once("\n").unwrap();
-
-        assert!(header.starts_with("at"));
-        assert!(header.contains("contracts.rs"));
-        assert!(header.ends_with(": Shape Error"));
-
-        assert_eq!(
-            body,
-            indoc! {r#"
-                  8 !~ height=(hwins*window) :: No integer solution.
-                Actual:
-                  [1, 2, 3, 8, 12, 3]
-                Contract:
-                  [..., height=(hwins*window), width=(wwins*window), color]
-                Bindings:
-                  {"window": 5, "color": 3}"#
-            },
-        );
-
-        let err = CONTRACT
-            .try_unpack_shape(
-                &shape,
-                &["hwins", "wwins"],
-                &[("height", 1), ("window", window), ("color", color)],
-            )
-            .unwrap_err();
-        let (header, body) = err.split_once("\n").unwrap();
-
-        assert!(header.starts_with("at"));
-        assert!(header.contains("contracts.rs"));
-        assert!(header.ends_with(": Shape Error"));
-
-        assert_eq!(
-            body,
-            indoc! {r#"
-                  8 !~ height=(hwins*window) :: Value MissMatch.
-                Actual:
-                  [1, 2, 3, 8, 12, 3]
-                Contract:
-                  [..., height=(hwins*window), width=(wwins*window), color]
-                Bindings:
-                  {"height": 1, "window": 4, "color": 3}"#
-            },
-        );
-    }
-
-    #[test]
-    fn test_check_ellipsis_split() {
-        {
-            // With ellipsis.
-            static PATTERN: ShapeContract = ShapeContract::new(&[
-                DimMatcher::any(),
-                DimMatcher::ellipsis(),
-                DimMatcher::expr(DimExpr::Param("b")),
-            ]);
-
-            assert_eq!(PATTERN.try_ellipsis_split(2), Ok((1, 0)));
-            assert_eq!(PATTERN.try_ellipsis_split(3), Ok((1, 1)));
-            assert_eq!(PATTERN.try_ellipsis_split(4), Ok((1, 2)));
-
-            assert_eq!(
-                PATTERN.try_ellipsis_split(1),
-                Err("Shape rank 1 < non-ellipsis pattern term count 2".to_string())
-            );
-        }
-        {
-            // Without ellipsis.
-            static PATTERN: ShapeContract =
-                ShapeContract::new(&[DimMatcher::any(), DimMatcher::expr(DimExpr::Param("b"))]);
-
-            assert_eq!(PATTERN.try_ellipsis_split(2), Ok((2, 0)));
-
-            assert_eq!(
-                PATTERN.try_ellipsis_split(1),
-                Err("Shape rank 1 != pattern dim count 2".to_string())
-            );
-        }
-    }
-
-    #[test]
-    fn test_format_pattern() {
-        static PATTERN: ShapeContract = ShapeContract::new(&[
-            DimMatcher::any(),
-            DimMatcher::ellipsis(),
-            DimMatcher::expr(DimExpr::Param("b")),
-            DimMatcher::expr(DimExpr::Prod(&[
-                DimExpr::Param("h"),
-                DimExpr::Sum(&[DimExpr::Param("a"), DimExpr::Negate(&DimExpr::Param("b"))]),
-            ])),
-            DimMatcher::expr(DimExpr::Pow(&DimExpr::Param("h"), 2)),
-        ]);
-
-        assert_eq!(PATTERN.to_string(), "[_, ..., b, (h*(a+(-b))), (h)^2]");
-    }
+    use crate::expressions::DimExpr;
 
     #[test]
     fn test_unpack_shape() {
-        static CONTRACT: ShapeContract = ShapeContract::new(&[
-            DimMatcher::any(),
-            DimMatcher::expr(DimExpr::Param("b")),
-            DimMatcher::ellipsis(),
-            DimMatcher::expr(DimExpr::Prod(&[DimExpr::Param("h"), DimExpr::Param("p")])),
-            DimMatcher::expr(DimExpr::Prod(&[DimExpr::Param("w"), DimExpr::Param("p")])),
-            DimMatcher::expr(DimExpr::Pow(&DimExpr::Param("z"), 3)),
-            DimMatcher::expr(DimExpr::Param("c")),
-        ]);
+        static CONTRACT: ShapeContract = ShapeContract::new(
+            &["b", "h", "w", "p", "z", "c"],
+            &[
+                DimMatcher::any(),
+                DimMatcher::expr(DimExpr::Param { id: 0 }),
+                DimMatcher::ellipsis(),
+                DimMatcher::expr(DimExpr::Prod {
+                    children: &[DimExpr::Param { id: 1 }, DimExpr::Param { id: 3 }],
+                }),
+                DimMatcher::expr(DimExpr::Prod {
+                    children: &[DimExpr::Param { id: 2 }, DimExpr::Param { id: 3 }],
+                }),
+                DimMatcher::expr(DimExpr::Pow {
+                    base: &DimExpr::Param { id: 4 },
+                    exp: 3,
+                }),
+                DimMatcher::expr(DimExpr::Param { id: 5 }),
+            ],
+        );
 
         let b = 2;
         let h = 3;
@@ -805,50 +732,5 @@ mod tests {
         assert_eq!(u_h, h);
         assert_eq!(u_w, w);
         assert_eq!(u_z, z);
-    }
-
-    #[should_panic(expected = "1 !~ a :: Value MissMatch.")]
-    #[test]
-    fn test_unpack_shape_panic() {
-        use crate as bimm_contracts;
-        static CONTRACT: ShapeContract = shape_contract!["a", "b", "c"];
-        let _ignore = CONTRACT.unpack_shape(&[1, 2, 3], &["a", "b", "c"], &[("a", 7)]);
-    }
-
-    #[should_panic(expected = "Shape rank 3 != pattern dim count 1")]
-    #[test]
-    fn test_shape_mismatch_no_ellipsis() {
-        // This should panic because the shape does not match the pattern.
-        static PATTERN: ShapeContract =
-            ShapeContract::new(&[DimMatcher::expr(DimExpr::Param("a"))]);
-        let shape = [1, 2, 3];
-        PATTERN.assert_shape(&shape, &[]);
-    }
-
-    #[should_panic(expected = "Shape rank 3 < non-ellipsis pattern term count 4")]
-    #[test]
-    fn test_shape_mismatch_with_ellipsis() {
-        // This should panic because the shape does not match the pattern.
-        static PATTERN: ShapeContract = ShapeContract::new(&[
-            DimMatcher::any(),
-            DimMatcher::any(),
-            DimMatcher::ellipsis(),
-            DimMatcher::expr(DimExpr::Param("b")),
-            DimMatcher::expr(DimExpr::Param("c")),
-        ]);
-        let shape = [1, 2, 3];
-        PATTERN.assert_shape(&shape, &[]);
-    }
-
-    #[should_panic(expected = "Value MissMatch")]
-    #[test]
-    fn test_shape_mismatch_value() {
-        // This should panic because the value does not match the constraint.
-        static PATTERN: ShapeContract = ShapeContract::new(&[
-            DimMatcher::expr(DimExpr::Param("a")),
-            DimMatcher::expr(DimExpr::Param("b")),
-        ]);
-        let shape = [2, 3];
-        PATTERN.assert_shape(&shape, &[("a", 2), ("b", 4)]);
     }
 }

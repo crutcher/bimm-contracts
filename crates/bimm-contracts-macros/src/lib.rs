@@ -1,5 +1,4 @@
 #![warn(missing_docs)]
-#![allow(unused)]
 //! `proc_macro` support for BIMM Contracts.
 
 extern crate alloc;
@@ -15,6 +14,10 @@ use std::collections::BTreeSet;
 use syn::Result as SynResult;
 use syn::parse::{Parse, ParseStream};
 use syn::{LitStr, Token, parse_macro_input};
+
+fn label_to_slot(label: &str, index: &[&str]) -> usize {
+    index.iter().position(|k| *k == label).unwrap()
+}
 
 /// Parse shape contract from token stream.
 fn parse_shape_contract_terms(input: ParseStream) -> SynResult<ShapeContractAST> {
@@ -277,35 +280,36 @@ fn parse_factor_expr(input: ParseStream) -> SynResult<ExprAST> {
 }
 
 impl ExprAST {
-    fn to_tokens(&self) -> TokenStream2 {
+    fn to_tokens(&self, index: &[&str]) -> TokenStream2 {
         match self {
             ExprAST::Param(name) => {
+                let param_id = label_to_slot(name, index);
                 quote! {
-                    bimm_contracts::DimExpr::Param(#name)
+                    bimm_contracts::DimExpr::Param{id: #param_id}
                 }
             }
             ExprAST::Negate(expr) => {
-                let inner = expr.to_tokens();
+                let inner = expr.to_tokens(index);
                 quote! {
-                    bimm_contracts::DimExpr::Negate(&#inner)
+                    bimm_contracts::DimExpr::Negate{child: &#inner}
                 }
             }
             ExprAST::Pow(base, exp) => {
-                let base_tokens = base.to_tokens();
+                let base_tokens = base.to_tokens(index);
                 quote! {
-                    bimm_contracts::DimExpr::Pow(&#base_tokens, #exp)
+                    bimm_contracts::DimExpr::Pow{base: &#base_tokens, exp : #exp}
                 }
             }
             ExprAST::Sum(terms) => {
-                let term_tokens: Vec<_> = terms.iter().map(|t| t.to_tokens()).collect();
+                let term_tokens: Vec<_> = terms.iter().map(|t| t.to_tokens(index)).collect();
                 quote! {
-                    bimm_contracts::DimExpr::Sum(&[#(#term_tokens),*])
+                    bimm_contracts::DimExpr::Sum{children: &[#(#term_tokens),*]}
                 }
             }
             ExprAST::Prod(factors) => {
-                let factor_tokens: Vec<_> = factors.iter().map(|f| f.to_tokens()).collect();
+                let factor_tokens: Vec<_> = factors.iter().map(|f| f.to_tokens(index)).collect();
                 quote! {
-                    bimm_contracts::DimExpr::Prod(&[#(#factor_tokens),*])
+                    bimm_contracts::DimExpr::Prod{children: &[#(#factor_tokens),*]}
                 }
             }
         }
@@ -313,29 +317,32 @@ impl ExprAST {
 }
 
 impl DimMatcherAST {
-    fn to_tokens(&self) -> TokenStream2 {
+    fn to_tokens(&self, index: &[&str]) -> TokenStream2 {
         match self {
             DimMatcherAST::Any { label } => {
                 let base = quote! { bimm_contracts::DimMatcher::any() };
-                if label.is_some() {
-                    quote! { #base.with_label(Some(#label)) }
+                if let Some(label) = label {
+                    let label_id = label_to_slot(label, index);
+                    quote! { #base.with_label_id(Some(#label_id)) }
                 } else {
                     base
                 }
             }
             DimMatcherAST::Ellipsis { label } => {
                 let base = quote! { bimm_contracts::DimMatcher::ellipsis() };
-                if label.is_some() {
-                    quote! { #base.with_label(Some(#label)) }
+                if let Some(label) = label {
+                    let label_id = label_to_slot(label, index);
+                    quote! { #base.with_label_id(Some(#label_id)) }
                 } else {
                     base
                 }
             }
             DimMatcherAST::Expr { label, expr } => {
-                let expr_tokens = expr.to_tokens();
+                let expr_tokens = expr.to_tokens(index);
                 let base = quote! { bimm_contracts::DimMatcher::expr(#expr_tokens) };
-                if label.is_some() {
-                    quote! { #base.with_label(Some(#label)) }
+                if let Some(label) = label {
+                    let label_id = label_to_slot(label, index);
+                    quote! { #base.with_label_id(Some(#label_id)) }
                 } else {
                     base
                 }
@@ -346,11 +353,18 @@ impl DimMatcherAST {
 
 impl ShapeContractAST {
     fn to_tokens(&self) -> TokenStream2 {
-        let term_tokens: Vec<_> = self.terms.iter().map(|t| t.to_tokens()).collect();
+        let labels = self.labels();
+        let index: Vec<&str> = labels.iter().map(|label| label.as_str()).collect();
+        let index_tokens = index
+            .iter()
+            .map(|label| quote! { #label })
+            .collect::<Vec<_>>();
+        let term_tokens: Vec<_> = self.terms.iter().map(|t| t.to_tokens(&index)).collect();
         quote! {
-            bimm_contracts::ShapeContract::new(&[
-                #(#term_tokens),*
-            ])
+            bimm_contracts::ShapeContract::new(
+                &[#(#index_tokens),*],
+                &[#(#term_tokens),*],
+            )
         }
     }
 }
@@ -416,15 +430,23 @@ mod tests {
         }
     }
 
+    fn assert_token_stream_eq(actual: &TokenStream2, expected: &TokenStream2) {
+        // It would be nice to pretty print on error.
+        assert_eq!(actual.to_string(), expected.to_string())
+    }
+
     #[test]
     fn test_unary_add_op() {
         let tokens: proc_macro2::TokenStream = r#"+ "x""#.parse().unwrap();
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
         assert_eq!(input.expr, ExprAST::Param("x".to_string()));
 
-        assert_eq!(
-            input.expr.to_tokens().to_string(),
-            "bimm_contracts :: DimExpr :: Param (\"x\")"
+        let index = ["x"];
+        assert_token_stream_eq(
+            &input.expr.to_tokens(&index),
+            &quote! {
+            bimm_contracts::DimExpr::Param { id: 0usize }
+            },
         );
     }
 
@@ -434,9 +456,10 @@ mod tests {
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
         assert_eq!(input.expr, ExprAST::Param("x".to_string()));
 
+        let index = ["x"];
         assert_eq!(
-            input.expr.to_tokens().to_string(),
-            "bimm_contracts :: DimExpr :: Param (\"x\")"
+            input.expr.to_tokens(&index).to_string(),
+            "bimm_contracts :: DimExpr :: Param { id : 0usize }"
         );
     }
 
@@ -449,9 +472,13 @@ mod tests {
             ExprAST::Negate(Box::new(ExprAST::Param("x".to_string())))
         );
 
-        assert_eq!(
-            input.expr.to_tokens().to_string(),
-            "bimm_contracts :: DimExpr :: Negate (& bimm_contracts :: DimExpr :: Param (\"x\"))"
+        let index = ["x"];
+        assert_token_stream_eq(
+            &input.expr.to_tokens(&index),
+            &quote! {
+            bimm_contracts::DimExpr::Negate{ child:
+                &bimm_contracts::DimExpr::Param { id: 0usize } }
+            },
         );
     }
 
@@ -483,9 +510,10 @@ mod tests {
             ])
         );
 
+        let index = ["x", "a"];
         assert_eq!(
-            input.expr.to_tokens().to_string(),
-            "bimm_contracts :: DimExpr :: Sum (& [bimm_contracts :: DimExpr :: Param (\"a\") , bimm_contracts :: DimExpr :: Negate (& bimm_contracts :: DimExpr :: Negate (& bimm_contracts :: DimExpr :: Param (\"x\")))])"
+            input.expr.to_tokens(&index).to_string(),
+            "bimm_contracts :: DimExpr :: Sum { children : & [bimm_contracts :: DimExpr :: Param { id : 1usize } , bimm_contracts :: DimExpr :: Negate { child : & bimm_contracts :: DimExpr :: Negate { child : & bimm_contracts :: DimExpr :: Param { id : 0usize } } }] }"
         );
     }
 
@@ -501,9 +529,10 @@ mod tests {
             )
         );
 
+        let index = ["x", "a"];
         assert_eq!(
-            input.expr.to_tokens().to_string(),
-            "bimm_contracts :: DimExpr :: Pow (& bimm_contracts :: DimExpr :: Negate (& bimm_contracts :: DimExpr :: Param (\"x\")) , 3usize)"
+            input.expr.to_tokens(&index).to_string(),
+            "bimm_contracts :: DimExpr :: Pow { base : & bimm_contracts :: DimExpr :: Negate { child : & bimm_contracts :: DimExpr :: Param { id : 0usize } } , exp : 3usize }"
         );
     }
 
@@ -546,16 +575,33 @@ mod tests {
             }
         );
 
-        assert_eq!(
-            contract.to_tokens().to_string(),
-            "bimm_contracts :: ShapeContract :: new (& [\
-bimm_contracts :: DimMatcher :: any () . with_label (Some (\"any\")) , \
-bimm_contracts :: DimMatcher :: expr (bimm_contracts :: DimExpr :: Param (\"x\")) , \
-bimm_contracts :: DimMatcher :: ellipsis () , \
-bimm_contracts :: DimMatcher :: expr (bimm_contracts :: DimExpr :: Sum (& [bimm_contracts :: DimExpr :: Param (\"y\") , \
-bimm_contracts :: DimExpr :: Pow (& bimm_contracts :: DimExpr :: Prod (& [bimm_contracts :: DimExpr :: Param (\"z\") , \
-bimm_contracts :: DimExpr :: Param (\"w\")\
-]) , 2usize)]))])",
+        // any, w, x, y, z
+        assert_token_stream_eq(
+            &contract.to_tokens(),
+            &quote! {
+            bimm_contracts::ShapeContract::new(
+                &["any", "w", "x", "y", "z"],
+                &[
+                    bimm_contracts::DimMatcher::any().with_label_id(Some(0usize)),
+                    bimm_contracts::DimMatcher::expr(
+                        bimm_contracts::DimExpr::Param { id: 2usize }),
+                    bimm_contracts::DimMatcher::ellipsis(),
+                    bimm_contracts::DimMatcher::expr(
+                        bimm_contracts::DimExpr::Sum{
+                            children: &[
+                                bimm_contracts::DimExpr::Param { id: 3usize },
+                                bimm_contracts::DimExpr::Pow {
+                                    base: &bimm_contracts::DimExpr::Prod {
+                                        children: &[
+                                            bimm_contracts::DimExpr::Param { id: 4usize },
+                                            bimm_contracts::DimExpr::Param { id: 1usize }
+                                        ]
+                                    },
+                                    exp: 2usize
+                                }]
+                        })
+                ],
+            )},
         );
     }
 }
