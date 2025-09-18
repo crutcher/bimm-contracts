@@ -1,15 +1,6 @@
-use bimm_contracts::{DimExpr, DimMatcher, ShapeContract, run_periodically};
+use bimm_contracts::{ShapeContract, run_periodically};
+use bimm_contracts_macros::shape_contract;
 use criterion::{Criterion, criterion_group, criterion_main};
-
-static PATTERN: ShapeContract = ShapeContract::new(&[
-    DimMatcher::any(),
-    DimMatcher::expr(DimExpr::Param("b")),
-    DimMatcher::ellipsis(),
-    DimMatcher::expr(DimExpr::Prod(&[DimExpr::Param("h"), DimExpr::Param("p")])),
-    DimMatcher::expr(DimExpr::Prod(&[DimExpr::Param("w"), DimExpr::Param("p")])),
-    DimMatcher::expr(DimExpr::Pow(&DimExpr::Param("z"), 3)),
-    DimMatcher::expr(DimExpr::Param("c")),
-]);
 
 static BATCH: usize = 2;
 static HEIGHT: usize = 3;
@@ -18,7 +9,34 @@ static PADDING: usize = 4;
 static CHANNELS: usize = 5;
 static COLOR: usize = 4;
 
+fn bench_unpack_shape_bchpwp(c: &mut Criterion) {
+    static PATTERN: ShapeContract = shape_contract!["b", "c", "h" * "p", "w" * "p",];
+
+    let shape = [BATCH, CHANNELS, HEIGHT * PADDING, WIDTH * PADDING];
+    let env = [("p", PADDING), ("c", CHANNELS)];
+
+    c.bench_function("unpack_shape hwp", |b| {
+        b.iter(|| {
+            let [b, h, w, c] = PATTERN.unpack_shape(&shape, &["b", "h", "w", "c"], &env);
+
+            assert_eq!(b, BATCH);
+            assert_eq!(h, HEIGHT);
+            assert_eq!(w, WIDTH);
+            assert_eq!(c, CHANNELS);
+        })
+    });
+}
 fn bench_unpack_shape(c: &mut Criterion) {
+    static PATTERN: ShapeContract = shape_contract![
+        _,
+        "b",
+        ...,
+        "h"*"p",
+        "w"*"p",
+        "z"^3,
+        "c"
+    ];
+
     let shape = [
         12,
         BATCH,
@@ -45,6 +63,16 @@ fn bench_unpack_shape(c: &mut Criterion) {
 }
 
 fn bench_assert_shape(c: &mut Criterion) {
+    static PATTERN: ShapeContract = shape_contract![
+        _,
+        "b",
+        ...,
+        "h"*"p",
+        "w"*"p",
+        "z"^3,
+        "c"
+    ];
+
     let shape = [
         12,
         BATCH,
@@ -66,6 +94,16 @@ fn bench_assert_shape(c: &mut Criterion) {
 }
 
 fn bench_assert_shape_every_nth(c: &mut Criterion) {
+    static PATTERN: ShapeContract = shape_contract![
+        _,
+        "b",
+        ...,
+        "h"*"p",
+        "w"*"p",
+        "z"^3,
+        "c"
+    ];
+
     let shape = [
         12,
         BATCH,
@@ -93,6 +131,7 @@ fn bench_assert_shape_every_nth(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_unpack_shape,
+    bench_unpack_shape_bchpwp,
     bench_assert_shape,
     bench_assert_shape_every_nth
 );

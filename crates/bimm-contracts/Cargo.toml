@@ -17,7 +17,7 @@ all-features = true
 workspace = true
 
 [dependencies]
-bimm-contracts-macros = { version = "0.4.2", path = "../bimm-contracts-macros" }
+bimm-contracts-macros = { version = "0.4.3", path = "../bimm-contracts-macros" }
 
 burn = { workspace = true, optional = true }
 tch = { workspace = true, optional = true }
