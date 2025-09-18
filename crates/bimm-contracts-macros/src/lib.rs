@@ -1,4 +1,5 @@
 #![warn(missing_docs)]
+#![allow(unused)]
 //! `proc_macro` support for BIMM Contracts.
 
 extern crate alloc;
@@ -10,12 +11,13 @@ use alloc::vec::Vec;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use std::collections::BTreeSet;
 use syn::Result as SynResult;
 use syn::parse::{Parse, ParseStream};
 use syn::{LitStr, Token, parse_macro_input};
 
 /// Parse shape contract from token stream.
-fn parse_shape_contract_terms(input: ParseStream) -> SynResult<ShapeContract> {
+fn parse_shape_contract_terms(input: ParseStream) -> SynResult<ShapeContractAST> {
     let mut terms = Vec::new();
 
     while !input.is_empty() {
@@ -31,11 +33,11 @@ fn parse_shape_contract_terms(input: ParseStream) -> SynResult<ShapeContract> {
         }
     }
 
-    Ok(ShapeContract { terms })
+    Ok(ShapeContractAST { terms })
 }
 
 /// Parse a single contract dim term from tokens.
-fn parse_dim_matcher_tokens(input: ParseStream) -> SynResult<DimMatcher> {
+fn parse_dim_matcher_tokens(input: ParseStream) -> SynResult<DimMatcherAST> {
     let mut label = None;
 
     // peek 2: ["name" =]
@@ -48,42 +50,69 @@ fn parse_dim_matcher_tokens(input: ParseStream) -> SynResult<DimMatcher> {
     // Check for "_" (underscore) for Any
     if input.peek(Token![_]) {
         input.parse::<Token![_]>()?;
-        return Ok(DimMatcher::Any { label });
+        return Ok(DimMatcherAST::Any { label });
     }
 
     // Check for ellipsis "..."
     if input.peek(Token![...]) {
         input.parse::<Token![...]>()?;
-        return Ok(DimMatcher::Ellipsis { label });
+        return Ok(DimMatcherAST::Ellipsis { label });
     }
 
     // Otherwise, parse as an expression.
     let expr = parse_expr_tokens(input)?;
-    Ok(DimMatcher::Expr { label, expr })
+    Ok(DimMatcherAST::Expr { label, expr })
 }
 
 /// Represents a node in a dimension expression.
 #[derive(Debug, Clone, PartialEq)]
-enum ExprNode {
+enum ExprAST {
     /// A parameter (string literal).
     Param(String),
 
     /// Negation of another expression.
-    Negate(Box<ExprNode>),
+    Negate(Box<ExprAST>),
 
     /// Power of an expression (base raised to an exponent).
-    Pow(Box<ExprNode>, usize),
+    Pow(Box<ExprAST>, usize),
 
     /// Sum of multiple expressions (addition and subtraction).
-    Sum(Vec<ExprNode>),
+    Sum(Vec<ExprAST>),
 
     /// Product of multiple expressions (multiplication).
-    Prod(Vec<ExprNode>),
+    Prod(Vec<ExprAST>),
+}
+
+impl ExprAST {
+    /// Add all parameter labels to the set.
+    pub fn collect_labels(&self, labels: &mut BTreeSet<String>) {
+        match self {
+            ExprAST::Param(name) => {
+                labels.insert(name.clone());
+            }
+            ExprAST::Negate(expr) => {
+                expr.collect_labels(labels);
+            }
+            ExprAST::Pow(base, _) => {
+                base.collect_labels(labels);
+            }
+            ExprAST::Sum(terms) => {
+                for term in terms {
+                    term.collect_labels(labels);
+                }
+            }
+            ExprAST::Prod(factors) => {
+                for factor in factors {
+                    factor.collect_labels(labels);
+                }
+            }
+        }
+    }
 }
 
 /// Represents a matcher for a dimension in a shape contract.
 #[derive(Debug, Clone, PartialEq)]
-enum DimMatcher {
+enum DimMatcherAST {
     /// Matches any dimension, ignoring size.
     Any { label: Option<String> },
 
@@ -95,8 +124,28 @@ enum DimMatcher {
     /// Matches a dimension based on an expression.
     Expr {
         label: Option<String>,
-        expr: ExprNode,
+        expr: ExprAST,
     },
+}
+
+impl DimMatcherAST {
+    pub fn label(&self) -> Option<String> {
+        match self {
+            DimMatcherAST::Any { label } => label.clone(),
+            DimMatcherAST::Ellipsis { label } => label.clone(),
+            DimMatcherAST::Expr { label, .. } => label.clone(),
+        }
+    }
+
+    /// Add all parameter labels to the set.
+    pub fn collect_labels(&self, labels: &mut BTreeSet<String>) {
+        if let Some(label) = self.label() {
+            labels.insert(label);
+        }
+        if let DimMatcherAST::Expr { expr, .. } = self {
+            expr.collect_labels(labels);
+        }
+    }
 }
 
 /// Represents a shape contract, which consists of multiple dimension matchers.
@@ -104,15 +153,31 @@ enum DimMatcher {
 /// The `shape_contract!` macro allows you to define a shape contract
 /// that can be used to match shapes in a type-safe manner.
 #[derive(Debug, Clone, PartialEq)]
-struct ShapeContract {
+struct ShapeContractAST {
     /// The terms of the shape contract, each represented by a `DimMatcher`.
-    pub terms: Vec<DimMatcher>,
+    pub terms: Vec<DimMatcherAST>,
+}
+
+impl ShapeContractAST {
+    /// Add all parameter labels to the set.
+    pub fn collect_labels(&self, labels: &mut BTreeSet<String>) {
+        for term in &self.terms {
+            term.collect_labels(labels);
+        }
+    }
+
+    /// Get all parameter labels.
+    pub fn labels(&self) -> Vec<String> {
+        let mut labels = BTreeSet::new();
+        self.collect_labels(&mut labels);
+        labels.into_iter().collect()
+    }
 }
 
 /// Custom parser for shape contract syntax.
 struct ContractSyntax {
     /// The parsed shape contract.
-    contract: ShapeContract,
+    contract: ShapeContractAST,
 }
 
 impl Parse for ContractSyntax {
@@ -123,12 +188,12 @@ impl Parse for ContractSyntax {
 }
 
 /// Parse expression from token stream.
-fn parse_expr_tokens(input: ParseStream) -> SynResult<ExprNode> {
+fn parse_expr_tokens(input: ParseStream) -> SynResult<ExprAST> {
     parse_sum_expr(input)
 }
 
 /// Parse sum/difference (lowest precedence).
-fn parse_sum_expr(input: ParseStream) -> SynResult<ExprNode> {
+fn parse_sum_expr(input: ParseStream) -> SynResult<ExprAST> {
     let left = parse_prod_expr(input)?;
     let mut terms = vec![left.clone()];
 
@@ -136,19 +201,19 @@ fn parse_sum_expr(input: ParseStream) -> SynResult<ExprNode> {
         if input.parse::<Token![+]>().is_ok() {
             terms.push(parse_prod_expr(input)?);
         } else if input.parse::<Token![-]>().is_ok() {
-            terms.push(ExprNode::Negate(Box::new(parse_prod_expr(input)?)));
+            terms.push(ExprAST::Negate(Box::new(parse_prod_expr(input)?)));
         }
     }
 
     Ok(if terms.len() == 1 {
         terms.into_iter().next().unwrap()
     } else {
-        ExprNode::Sum(terms)
+        ExprAST::Sum(terms)
     })
 }
 
 /// Parse multiplication (higher precedence).
-fn parse_prod_expr(input: ParseStream) -> SynResult<ExprNode> {
+fn parse_prod_expr(input: ParseStream) -> SynResult<ExprAST> {
     let mut factors = vec![parse_power_expr(input)?];
 
     while input.peek(Token![*]) {
@@ -159,31 +224,31 @@ fn parse_prod_expr(input: ParseStream) -> SynResult<ExprNode> {
     Ok(if factors.len() == 1 {
         factors.into_iter().next().unwrap()
     } else {
-        ExprNode::Prod(factors)
+        ExprAST::Prod(factors)
     })
 }
 
 /// Parse power (highest precedence).
-fn parse_power_expr(input: ParseStream) -> SynResult<ExprNode> {
+fn parse_power_expr(input: ParseStream) -> SynResult<ExprAST> {
     let base = parse_factor_expr(input)?;
 
     if input.peek(Token![^]) {
         input.parse::<Token![^]>()?;
         let exp: syn::LitInt = input.parse()?;
         let exp_value: usize = exp.base10_parse()?;
-        Ok(ExprNode::Pow(Box::new(base), exp_value))
+        Ok(ExprAST::Pow(Box::new(base), exp_value))
     } else {
         Ok(base)
     }
 }
 
 /// Parse factors (parameters, parentheses, negation).
-fn parse_factor_expr(input: ParseStream) -> SynResult<ExprNode> {
+fn parse_factor_expr(input: ParseStream) -> SynResult<ExprAST> {
     // Handle unary operators
     if input.peek(Token![-]) {
         input.parse::<Token![-]>()?;
         let expr = parse_factor_expr(input)?;
-        return Ok(ExprNode::Negate(Box::new(expr)));
+        return Ok(ExprAST::Negate(Box::new(expr)));
     }
 
     if input.peek(Token![+]) {
@@ -202,7 +267,7 @@ fn parse_factor_expr(input: ParseStream) -> SynResult<ExprNode> {
     // Handle string literals (parameters)
     if input.peek(LitStr) {
         let lit: LitStr = input.parse()?;
-        return Ok(ExprNode::Param(lit.value()));
+        return Ok(ExprAST::Param(lit.value()));
     }
 
     Err(syn::Error::new(
@@ -211,33 +276,33 @@ fn parse_factor_expr(input: ParseStream) -> SynResult<ExprNode> {
     ))
 }
 
-impl ExprNode {
+impl ExprAST {
     fn to_tokens(&self) -> TokenStream2 {
         match self {
-            ExprNode::Param(name) => {
+            ExprAST::Param(name) => {
                 quote! {
                     bimm_contracts::DimExpr::Param(#name)
                 }
             }
-            ExprNode::Negate(expr) => {
+            ExprAST::Negate(expr) => {
                 let inner = expr.to_tokens();
                 quote! {
                     bimm_contracts::DimExpr::Negate(&#inner)
                 }
             }
-            ExprNode::Pow(base, exp) => {
+            ExprAST::Pow(base, exp) => {
                 let base_tokens = base.to_tokens();
                 quote! {
                     bimm_contracts::DimExpr::Pow(&#base_tokens, #exp)
                 }
             }
-            ExprNode::Sum(terms) => {
+            ExprAST::Sum(terms) => {
                 let term_tokens: Vec<_> = terms.iter().map(|t| t.to_tokens()).collect();
                 quote! {
                     bimm_contracts::DimExpr::Sum(&[#(#term_tokens),*])
                 }
             }
-            ExprNode::Prod(factors) => {
+            ExprAST::Prod(factors) => {
                 let factor_tokens: Vec<_> = factors.iter().map(|f| f.to_tokens()).collect();
                 quote! {
                     bimm_contracts::DimExpr::Prod(&[#(#factor_tokens),*])
@@ -247,10 +312,10 @@ impl ExprNode {
     }
 }
 
-impl DimMatcher {
+impl DimMatcherAST {
     fn to_tokens(&self) -> TokenStream2 {
         match self {
-            DimMatcher::Any { label } => {
+            DimMatcherAST::Any { label } => {
                 let base = quote! { bimm_contracts::DimMatcher::any() };
                 if label.is_some() {
                     quote! { #base.with_label(Some(#label)) }
@@ -258,7 +323,7 @@ impl DimMatcher {
                     base
                 }
             }
-            DimMatcher::Ellipsis { label } => {
+            DimMatcherAST::Ellipsis { label } => {
                 let base = quote! { bimm_contracts::DimMatcher::ellipsis() };
                 if label.is_some() {
                     quote! { #base.with_label(Some(#label)) }
@@ -266,7 +331,7 @@ impl DimMatcher {
                     base
                 }
             }
-            DimMatcher::Expr { label, expr } => {
+            DimMatcherAST::Expr { label, expr } => {
                 let expr_tokens = expr.to_tokens();
                 let base = quote! { bimm_contracts::DimMatcher::expr(#expr_tokens) };
                 if label.is_some() {
@@ -279,7 +344,7 @@ impl DimMatcher {
     }
 }
 
-impl ShapeContract {
+impl ShapeContractAST {
     fn to_tokens(&self) -> TokenStream2 {
         let term_tokens: Vec<_> = self.terms.iter().map(|t| t.to_tokens()).collect();
         quote! {
@@ -341,7 +406,7 @@ mod tests {
     use alloc::vec;
 
     struct ExprSyntax {
-        expr: ExprNode,
+        expr: ExprAST,
     }
 
     impl Parse for ExprSyntax {
@@ -355,7 +420,7 @@ mod tests {
     fn test_unary_add_op() {
         let tokens: proc_macro2::TokenStream = r#"+ "x""#.parse().unwrap();
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
-        assert_eq!(input.expr, ExprNode::Param("x".to_string()));
+        assert_eq!(input.expr, ExprAST::Param("x".to_string()));
 
         assert_eq!(
             input.expr.to_tokens().to_string(),
@@ -367,7 +432,7 @@ mod tests {
     fn test_parse_simple_expression() {
         let tokens: proc_macro2::TokenStream = r#""x""#.parse().unwrap();
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
-        assert_eq!(input.expr, ExprNode::Param("x".to_string()));
+        assert_eq!(input.expr, ExprAST::Param("x".to_string()));
 
         assert_eq!(
             input.expr.to_tokens().to_string(),
@@ -381,7 +446,7 @@ mod tests {
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
         assert_eq!(
             input.expr,
-            ExprNode::Negate(Box::new(ExprNode::Param("x".to_string())))
+            ExprAST::Negate(Box::new(ExprAST::Param("x".to_string())))
         );
 
         assert_eq!(
@@ -396,10 +461,10 @@ mod tests {
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
         assert_eq!(
             input.expr,
-            ExprNode::Sum(vec![
-                ExprNode::Param("a".to_string()),
-                ExprNode::Param("b".to_string()),
-                ExprNode::Negate(Box::new(ExprNode::Param("x".to_string()))),
+            ExprAST::Sum(vec![
+                ExprAST::Param("a".to_string()),
+                ExprAST::Param("b".to_string()),
+                ExprAST::Negate(Box::new(ExprAST::Param("x".to_string()))),
             ])
         );
     }
@@ -410,9 +475,9 @@ mod tests {
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
         assert_eq!(
             input.expr,
-            ExprNode::Sum(vec![
-                ExprNode::Param("a".to_string()),
-                ExprNode::Negate(Box::new(ExprNode::Negate(Box::new(ExprNode::Param(
+            ExprAST::Sum(vec![
+                ExprAST::Param("a".to_string()),
+                ExprAST::Negate(Box::new(ExprAST::Negate(Box::new(ExprAST::Param(
                     "x".to_string()
                 ))))),
             ])
@@ -430,8 +495,8 @@ mod tests {
         let input = syn::parse2::<ExprSyntax>(tokens).unwrap();
         assert_eq!(
             input.expr,
-            ExprNode::Pow(
-                Box::new(ExprNode::Negate(Box::new(ExprNode::Param("x".to_string())))),
+            ExprAST::Pow(
+                Box::new(ExprAST::Negate(Box::new(ExprAST::Param("x".to_string())))),
                 3
             )
         );
@@ -452,28 +517,28 @@ mod tests {
         assert_eq!(contract.terms.len(), 4);
         assert_eq!(
             contract.terms[0],
-            DimMatcher::Any {
+            DimMatcherAST::Any {
                 label: Some("any".to_string())
             }
         );
         assert_eq!(
             contract.terms[1],
-            DimMatcher::Expr {
+            DimMatcherAST::Expr {
                 label: None,
-                expr: ExprNode::Param("x".to_string())
+                expr: ExprAST::Param("x".to_string())
             }
         );
-        assert_eq!(contract.terms[2], DimMatcher::Ellipsis { label: None });
+        assert_eq!(contract.terms[2], DimMatcherAST::Ellipsis { label: None });
         assert_eq!(
             contract.terms[3],
-            DimMatcher::Expr {
+            DimMatcherAST::Expr {
                 label: None,
-                expr: ExprNode::Sum(vec![
-                    ExprNode::Param("y".to_string()),
-                    ExprNode::Pow(
-                        Box::new(ExprNode::Prod(vec![
-                            ExprNode::Param("z".to_string()),
-                            ExprNode::Param("w".to_string())
+                expr: ExprAST::Sum(vec![
+                    ExprAST::Param("y".to_string()),
+                    ExprAST::Pow(
+                        Box::new(ExprAST::Prod(vec![
+                            ExprAST::Param("z".to_string()),
+                            ExprAST::Param("w".to_string())
                         ])),
                         2
                     ),
