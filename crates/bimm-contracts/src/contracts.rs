@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! # Shape Contracts.
 //!
 //! `bimm-contracts` is built around the [`ShapeContract`] interface.
@@ -227,6 +226,11 @@ impl<'a> ShapeContract<'a> {
             terms,
             ellipsis_pos,
         }
+    }
+
+    /// Convert a key to an index.
+    pub fn maybe_key_to_index(&self, key: &str) -> Option<usize> {
+        self.index.iter().position(|&s| s == key)
     }
 
     /// Assert that the shape matches the pattern.
@@ -522,25 +526,6 @@ impl<'a> ShapeContract<'a> {
             }
         }
         selection
-    }
-
-    /// Convert a key to an index.
-    pub fn maybe_key_to_index(&self, key: &str) -> Option<usize> {
-        self.index.iter().position(|&s| s == key)
-    }
-
-    /// Try and match and unpack `K` keys from a shape pattern.
-    #[track_caller]
-    fn try_select<S, const K: usize>(
-        &'a self,
-        shape: S,
-        selection: &[usize; K],
-        env: &mut [Option<isize>],
-    ) -> Result<[isize; K], String>
-    where
-        S: ShapeArgument,
-    {
-        self._loc_try_select(shape, selection, env, Location::caller())
     }
 
     fn _loc_try_select<S, const K: usize>(
